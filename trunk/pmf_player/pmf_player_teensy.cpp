@@ -56,9 +56,8 @@ void playback_interrupt()
   int16_t smp=*smp_addr;
   *smp_addr=0x80<<PMF_AUDIO_LEVEL;
   smp>>=PMF_AUDIO_LEVEL;
-  smp=smp<0?0:smp>255?255:smp;
-  GPIOD_PSOR=smp;
-  GPIOD_PCOR=~smp;
+  smp=smp<0?0:smp>4095?4095:smp;
+  analogWrite(A14, smp);
   if(++s_buffer_playback_pos==s_buffer+pmfplayer_audio_buffer_size)
     s_buffer_playback_pos=s_buffer;
 }
@@ -67,25 +66,9 @@ void playback_interrupt()
 void pmf_player::start_playback()
 {
   // setup pins
-  #define GPIO_BITBAND(reg, bit) (*(uint32_t *)GPIO_BITBAND_ADDR((reg), (bit)))
-  #define GPIO_BITBAND_ADDR(reg, bit) (((uint32_t)&(reg) - 0x40000000) * 32 + (bit) * 4 + 0x42000000)
-  #define CONFIG_PULLUP (PORT_PCR_MUX(1) | PORT_PCR_PE | PORT_PCR_PS)
-  GPIO_BITBAND(GPIOD_PDDR, 0) = 1;
-  PORTD_PCR0 = CONFIG_PULLUP;
-  GPIO_BITBAND(GPIOD_PDDR, 1) = 1;
-  PORTD_PCR1 = CONFIG_PULLUP;
-  GPIO_BITBAND(GPIOD_PDDR, 2) = 1;
-  PORTD_PCR2 = CONFIG_PULLUP;
-  GPIO_BITBAND(GPIOD_PDDR, 3) = 1;
-  PORTD_PCR3 = CONFIG_PULLUP;
-  GPIO_BITBAND(GPIOD_PDDR, 4) = 1;
-  PORTD_PCR4 = CONFIG_PULLUP;
-  GPIO_BITBAND(GPIOD_PDDR, 5) = 1;
-  PORTD_PCR5 = CONFIG_PULLUP;
-  GPIO_BITBAND(GPIOD_PDDR, 6) = 1;
-  PORTD_PCR6 = CONFIG_PULLUP;
-  GPIO_BITBAND(GPIOD_PDDR, 7) = 1;
-  PORTD_PCR7 = CONFIG_PULLUP;
+  DDRB=0x3f;
+  DDRC=0x3f;
+  analogWriteResolution(12);
 
   // clear audio buffer
   for(unsigned i=0; i<pmfplayer_audio_buffer_size; ++i)
@@ -114,7 +97,7 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
       continue;
 
     // get channel attributes
-    size_t sample_addr=(size_t)(m_pmf_file+pgm_read_word(channel->inst_metadata+pmfcfg_offset_inst_offset));
+    size_t sample_addr=(size_t)(m_pmf_file+pgm_read_dword(channel->inst_metadata+pmfcfg_offset_inst_offset));
     uint32_t sample_pos=(long(sample_addr)<<8)+channel->sample_pos;
     uint16_t sample_speed=channel->sample_speed;
     uint16_t sample_end=sample_addr+pgm_read_word(channel->inst_metadata+pmfcfg_offset_inst_length);
@@ -122,7 +105,7 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
     uint8_t sample_volume=(uint16_t(channel->sample_volume)*channel->vol_env_value)>>8;
 
     // mix channel to the buffer
-    int16_t *buf=(int16_t*)buf_.begin, *buffer_end=buf+buf_.num_samples;
+    int16_t *buf=(int16_t*)buf_.begin, *buffer_end=buf+num_samples_;
     do
     {
       // add channel sample to buffer
@@ -152,9 +135,9 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
 
 pmf_player::mixer_buffer pmf_player::get_mixer_buffer()
 {
-  /*todo: disable interrupts*/
+  cli();
   const int16_t *playback_pos=s_buffer_playback_pos;
-  /*todo: enable interrupts*/
+  sei();
   mixer_buffer buf={0, 0};
   if(   (s_subbuffer_write_idx && playback_pos>=s_buffer+audio_subbuffer_size)
      || (!s_subbuffer_write_idx && playback_pos<s_buffer+audio_subbuffer_size))
@@ -168,6 +151,21 @@ pmf_player::mixer_buffer pmf_player::get_mixer_buffer()
 
 void pmf_player::visualize_pattern_frame()
 {
+  // get LED states
+  uint16_t led_bits=0;
+  for(unsigned ci=0; ci<m_num_playback_channels; ++ci)
+  {
+    audio_channel &chl=m_channels[ci];
+    if(chl.note_hit)
+    {
+      led_bits|=1<<ci;
+      chl.note_hit=0;
+    }
+  }
+
+  // set LEDs
+  PORTB=led_bits;
+  PORTC=led_bits>>6;
 }
 //---------------------------------------------------------------------------
 
