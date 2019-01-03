@@ -1,7 +1,7 @@
 //============================================================================
-// Spin-X Platform (http://www.spinxplatform.com)
+// Spin-X Platform
 //
-// Copyright (c) 2013, Profoundic Technologies, Inc.
+// Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
 //----------------------------------------------------------------------------
 // Redistribution and use in source and binary forms, with or without
@@ -50,8 +50,7 @@ struct pmf_song;
 // PMF flags
 enum e_pmf_flags
 {
-  pmfflag_fast_note_slides   =0x01,  // regular note slide speeds are multiplied by 4
-  pmfflag_linear_freq_table  =0x02,  // 0=Amiga, 1=linear
+  pmfflag_linear_freq_table  =0x01,  // 0=Amiga, 1=linear
 };
 // PMF special notes
 enum {pmfcfg_note_cut=120};
@@ -72,6 +71,7 @@ enum e_pmf_effect
   pmffx_note_slide,        // [1, 0xdf] = slide, 0=use previous slide value, [0xe0, 0xff]=unused
   pmffx_arpeggio,          // x=[0, 15], y=[0, 15]
   pmffx_vibrato,           // [xxxxyyyy], x=vibrato speed, y=vibrato depth
+  pmffx_tremolo,           // [xxxxyyyy], x=tremolo speed, y=tremolo depth
   pmffx_note_vol_slide,    // [000xyyyy], x=vol slide type (0=down, 1=up), y=vol slide value [1, 15], if y=0, use previous slide type & value (x is ignored).
   pmffx_vibrato_vol_slide, // [000xyyyy], x=vol slide type (0=down, 1=up), y=vol slide value [1, 15], if y=0, use previous slide type & value (x is ignored).
   pmffx_retrig_vol_slide,  // [xxxxyyyy], x=volume slide param, y=sample retrigger frequency
@@ -80,10 +80,14 @@ enum e_pmf_effect
 };
 enum e_pmf_subfx
 {
+  pmfsubfx_set_glissando,    // 0=off, 1=on (when enabled "note slide" slides half a note at a time)
   pmfsubfx_set_finetune,     // [-8, 7]
   pmfsubfx_set_vibrato_wave, // [0xyy], x=[0=retrigger, 1=no retrigger], yy=vibrato wave=[0=sine, 1=ramp down, 2=square, 3=random]
+  pmfsubfx_set_tremolo_wave, // [0xyy], x=[0=retrigger, 1=no retrigger], yy=tremolo wave=[0=sine, 1=ramp down, 2=square, 3=random]
   pmfsubfx_pattern_delay,    // [1, 15]
-  pmfsubfx_loop_pattern,     // [0, 15], 0=set loop start, >0 = loop N times from loop start
+  pmfsubfx_pattern_loop,     // [0, 15], 0=set loop start, >0 = loop N times from loop start
+  pmfsubfx_note_cut,         // [0, 15], cut on X tick
+  pmfsubfx_note_delay,       // [0, 15], delay X ticks
 };
 enum e_pmfx_vslide_type
 {
@@ -91,6 +95,20 @@ enum e_pmfx_vslide_type
   pmffx_vslidetype_up        =0x10,
   pmffx_vslidetype_fine_down =0x20,
   pmffx_vslidetype_fine_up   =0x30,
+  //----
+  pmffx_vslidetype_mask      =0x30
+};
+//----------------------------------------------------------------------------
+
+
+//============================================================================
+// e_pmf_error
+//============================================================================
+enum e_pmf_error
+{
+  pmferr_ok,
+  pmferr_unknown_format,
+  pmferr_conversion_failure,
 };
 //----------------------------------------------------------------------------
 
@@ -106,6 +124,8 @@ struct pmf_header
   uint32 file_size;
   uint8 initial_speed;
   uint8 initial_tempo;
+  uint16 note_period_min;
+  uint16 note_period_max;
   uint16 playlist_length;
   uint8 num_channels;
   uint8 num_patterns;
@@ -121,13 +141,13 @@ struct pmf_header
 struct pmf_instrument_header
 {
   uint32 data_offset;
-  uint8 flags; // e_pmf_inst_flag
-  uint8 default_volume;
-  uint16 length;
-  uint16 loop_length;
-  uint16 c4hz;
+  uint32 length;
+  uint32 loop_length;
   uint16 vol_env_offset;
   uint16 fadeout_speed;
+  int16 finetune;
+  uint8 flags; // e_pmf_inst_flag
+  uint8 default_volume;
 };
 //----------------------------------------------------------------------------
 
@@ -140,8 +160,9 @@ struct pmf_pattern_track_row
   // construction
   pmf_pattern_track_row();
   bool operator==(const pmf_pattern_track_row&) const;
+  void clear();
   bool is_empty() const;
-  unsigned num_bits() const;
+  bool is_global_effect() const;
   //--------------------------------------------------------------------------
 
   uint8 note;        // octave*12+note_idx (254=note cut, 255=no note), note_idx={0=C, 1=C#, 2=D, 3=D#, 4=E, 5=F, 6=F#, 7=G, 8=G#, 9=A, 10=A#, 11=B}
@@ -149,7 +170,6 @@ struct pmf_pattern_track_row
   uint8 volume;      // vol=[0, 63], 255=no volume change
   uint8 effect;      // 255=no effect
   uint8 effect_data;
-  uint8 trailing_empty_rows;
 };
 //----------------------------------------------------------------------------
 
@@ -197,13 +217,27 @@ struct pmf_instrument
   pmf_instrument();
   //--------------------------------------------------------------------------
 
-  unsigned length;
-  unsigned loop_start, loop_len;
-  uint32 c4hz;
-  uint8 volume;
+  unsigned sample_idx;
   uint16 fadeout_speed;
-  owner_data data;
   pmf_envelope vol_envelope;
+};
+//----------------------------------------------------------------------------
+
+
+//============================================================================
+// pmf_sample
+//============================================================================
+struct pmf_sample
+{
+  // construction
+  pmf_sample();
+  //--------------------------------------------------------------------------
+
+  uint8 volume;
+  uint32 length;
+  uint32 loop_start, loop_len;
+  int16 finetune;
+  owner_data data;
 };
 //----------------------------------------------------------------------------
 
@@ -217,15 +251,19 @@ struct pmf_song
   pmf_song();
   //--------------------------------------------------------------------------
 
+  heap_str name;
   unsigned num_channels;
   uint16 flags; // e_pmf_flag
   uint8 initial_speed;
   uint8 initial_tempo;
-  unsigned total_pattern_data_bytes;
-  unsigned total_instrument_data_bytes;
+  uint16 note_period_min;
+  uint16 note_period_max;
+  usize_t total_pattern_data_bytes;
+  usize_t total_sample_data_bytes;
   array<uint8> playlist;
   array<pmf_pattern> patterns;
   array<pmf_instrument> instruments;
+  array<pmf_sample> samples;
 };
 //----------------------------------------------------------------------------
 

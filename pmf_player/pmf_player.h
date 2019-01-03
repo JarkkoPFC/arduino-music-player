@@ -1,7 +1,7 @@
 //============================================================================
-// PMF Player v0.3
+// PMF Player v0.4
 //
-// Copyright (c) 2013, Profoundic Technologies, Inc.
+// Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
 //----------------------------------------------------------------------------
 // Redistribution and use in source and binary forms, with or without
@@ -47,8 +47,9 @@ class pmf_player;
 // PMF player config
 //===========================================================================
 #define PMF_AUDIO_LEVEL 2
-enum {pmfplayer_sampling_rate=24000};    // playback frequency in Hz
-enum {pmfplayer_max_channels=16};        // maximum number of audio playback channels
+#define PMF_LINEAR_INTERPOLATION         // interpolate samples linearly for better sound quality (more CPU intensive)
+enum {pmfplayer_sampling_rate=22050};    // playback frequency in Hz
+enum {pmfplayer_max_channels=32};        // maximum number of audio playback channels
 enum {pmfplayer_led_beat_ticks=1};       // number of ticks to display LED upon not hit
 //---------------------------------------------------------------------------
 
@@ -77,8 +78,15 @@ private:
   void stop_playback();
   void mix_buffer(mixer_buffer&, unsigned num_samples_);
   mixer_buffer get_mixer_buffer();
+  void apply_channel_effect_volume_slide(audio_channel&);
+  void apply_channel_effect_note_slide(audio_channel&);
+  void apply_channel_effect_vibrato(audio_channel&);
   void apply_channel_effects();
   void evaluate_envelopes();
+  bool init_effect_volume_slide(audio_channel&, uint8_t effect_data_);
+  bool init_effect_note_slide(audio_channel&, uint8_t slide_speed_, uint16_t target_note_pediod_);
+  void init_effect_vibrato(audio_channel&, uint8_t vibrato_depth_, uint8_t vibrato_speed_);
+  void hit_note(audio_channel&, uint8_t note_idx_, uint32_t sample_start_pos_);
   void process_pattern_row();
   void process_track_row(audio_channel&, uint8_t &note_idx_, uint8_t &inst_idx_, uint8_t &volume_, uint8_t &effect_, uint8_t &effect_data_);
   void init_pattern(uint8_t playlist_pos_, uint8_t row_=0);
@@ -104,13 +112,15 @@ private:
     const uint8_t *inst_metadata;
     uint32_t sample_pos;           // sample position (24.8 fp)
     uint16_t sample_speed;         // sample speed (8.8 fp)
-    uint16_t sample_c4hz;          // sample C-4 Hz
+    int16_t sample_finetune;       // sample finetune (9.7 fp)
     uint8_t sample_volume;         // sample volume (0.8 fp)
     // sound effects
     uint16_t note_period;          // current note period (see s_note_periods for base note periods)
     uint8_t base_note_idx;         // base note index
     uint8_t effect;                // current effect
     uint8_t effect_data;           // current effect data
+    uint8_t vol_effect;            // current volume effect
+    uint8_t fxmem_arpeggio;        // arpeggio
     uint8_t fxmem_note_slide_spd;  // note slide speed
     uint16_t fxmem_note_slide_prd; // note slide target period
     uint8_t fxmem_vol_slide_spd;   // volume slide speed & type
@@ -119,6 +129,7 @@ private:
     uint8_t fxmem_vibrato_wave;    // vibrato waveform index & retrigger bit
     int8_t fxmem_vibrato_pos;      // vibrato wave pos
     uint8_t fxmem_retrig_count;    // sample retrigger count
+    uint8_t fxmem_note_delay_idx;  // note delay note index
     uint16_t vol_fadeout;          // fadeout volume
     uint8_t vol_env_tick;          // volume envelope ticks
     int8_t vol_env_pos;            // volume envelope position
@@ -154,6 +165,8 @@ private:
   uint8_t m_current_pattern_last_row;
   uint8_t m_current_pattern_row_idx;
   uint8_t m_current_row_tick;
+  uint16_t m_note_period_min;
+  uint16_t m_note_period_max;
   uint8_t m_speed;
   uint8_t m_arpeggio_counter;
   uint8_t m_pattern_delay;

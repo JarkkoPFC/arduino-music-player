@@ -1,7 +1,7 @@
 //============================================================================
-// Spin-X Platform (http://www.spinxplatform.com)
+// Spin-X Platform
 //
-// Copyright (c) 2013, Profoundic Technologies, Inc.
+// Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
 //----------------------------------------------------------------------------
 // Redistribution and use in source and binary forms, with or without
@@ -56,28 +56,34 @@ struct xm_sample
 //============================================================================
 // convert_xm
 //============================================================================
-bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
+e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
 {
   // check for XM file type
   char id[17];
   in_file_.read_bytes(id, 17);
   in_file_.rewind();
   if(!mem_eq(id, "Extended Module: ", 17))
-    return false;
+    return pmferr_unknown_format;
 
   // read header
   uint16 version, song_len, restart_pos, num_channels, num_patterns, num_instruments, flags, default_tempo, default_speed;
   uint32 header_size;
-  in_file_.skip(58);
+  in_file_.skip(17);
+  char song_name[21]={0};
+  in_file_.read_bytes(song_name, 20);
+  in_file_.skip(21);
   in_file_>>version>>header_size>>song_len>>restart_pos>>num_channels>>num_patterns>>num_instruments>>flags>>default_speed>>default_tempo;
   uint8 pattern_orders[256];
   in_file_.read_bytes(pattern_orders, 256);
 
   // setup song
+  song_.name=song_name;
   song_.num_channels=num_channels;
-  song_.flags=pmfflag_fast_note_slides|(flags&1?pmfflag_linear_freq_table:0);
+  song_.flags=flags&1?pmfflag_linear_freq_table:0;
   song_.initial_speed=uint8(default_speed);
   song_.initial_tempo=uint8(default_tempo);
+  song_.note_period_min=28;
+  song_.note_period_max=27392;
 
   // setup orders
   song_.playlist.resize(song_len);
@@ -85,6 +91,7 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
     song_.playlist[i]=pattern_orders[i];
 
   // read patterns
+  in_file_.seek(header_size+60);
   for(unsigned pi=0; pi<num_patterns; ++pi)
   {
     // read pattern header
@@ -140,9 +147,17 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
           if(instrument)
             track_row->instrument=instrument-1;
 
-          // volume
+          // map volume/volume effect
           if(volume>=0x10 && volume<=0x50)
-            track_row->volume=volume<0x50?volume-0x10:63;
+            track_row->volume=volume<0x50?volume-0x10:63; // set volume
+          else if(volume>=0x60 && volume<=0x9f)
+            track_row->volume=volume-0x60+0x40;           // volume slide
+          else if(volume>=0xa0 && volume<=0xaf)
+            track_row->volume=volume-0xa0+0xb0;           // set vibrato speed
+          else if(volume>=0xb0 && volume<=0xbf)
+            track_row->volume=volume-0xb0+0xc0;           // vibrato
+          else if(volume>=0xf0 && volume<=0xff)
+            track_row->volume=volume-0xf0+0x0a0;          // tone porta (note slide)
 
           // effect
           if(effect || effect_data)
@@ -202,6 +217,19 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
                   break;
                 track_row->effect=pmffx_vibrato_vol_slide;
                 track_row->effect_data=effect_data<0x10?pmffx_vslidetype_down+effect_data:(pmffx_vslidetype_up+(effect_data>>4));
+              } break;
+
+              // tremolo
+              case 7:
+              {
+                track_row->effect=pmffx_tremolo;
+                track_row->effect_data=effect_data;
+              } break;
+
+              // set panning
+              case 8:
+              {
+                /*todo*/
               } break;
 
               // set sample offset
@@ -269,6 +297,13 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
                     track_row->effect_data=(effect_data&0xf)+0xf0; /*todo: not quite sure if this should be fine (0xf0) or extra-fine (0xe0) slide like in MOD*/
                   } break;
 
+                  // set gliss control
+                  case 3:
+                  {
+                    track_row->effect=pmffx_subfx;
+                    track_row->effect_data=(pmfsubfx_set_glissando<<num_subfx_value_bits)|(effect_data&0xf?1:0);
+                  } break;
+
                   // set vibrato control
                   case 4:
                   {
@@ -291,7 +326,17 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
                   case 6:
                   {
                     track_row->effect=pmffx_subfx;
-                    track_row->effect_data=(pmfsubfx_loop_pattern<<num_subfx_value_bits)|(effect_data&0xf);
+                    track_row->effect_data=(pmfsubfx_pattern_loop<<num_subfx_value_bits)|(effect_data&0xf);
+                  } break;
+
+                  // set tremolo control
+                  case 7:
+                  {
+                    if((effect_data&0xf)<8)
+                    {
+                      track_row->effect=pmffx_subfx;
+                      track_row->effect_data=(pmfsubfx_set_tremolo_wave<<num_subfx_value_bits)|(effect_data&0xf);
+                    }
                   } break;
 
                   // retrig note
@@ -318,8 +363,15 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
                   // note cut
                   case 12:
                   {
-                    /*todo*/
-//                    track_row->note=pmfcfg_note_cut;
+                    track_row->effect=pmffx_subfx;
+                    track_row->effect_data=(pmfsubfx_note_cut<<num_subfx_value_bits)|(effect_data&0xf);
+                  } break;
+
+                  // note delay
+                  case 13:
+                  {
+                    track_row->effect=pmffx_subfx;
+                    track_row->effect_data=(pmfsubfx_note_delay<<num_subfx_value_bits)|(effect_data&0xf);
                   } break;
 
                   // pattern delay
@@ -337,14 +389,53 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
               // set tempo/bpm
               case 15:
               {
-                track_row->effect=pmffx_set_speed_tempo;
-                track_row->effect_data=effect_data?effect_data:1;
+                if(effect_data)
+                {
+                  track_row->effect=pmffx_set_speed_tempo;
+                  track_row->effect_data=effect_data;
+                }
+              } break;
+
+              // set global volume
+              case 16:
+              {
+                /*todo*/
+              } break;
+
+              // global volume slide
+              case 17:
+              {
+                /*todo*/
               } break;
 
               // key off
               case 20:
               {
                 track_row->note=0xfe;
+              } break;
+
+              // set envelope pos
+              case 21:
+              {
+                /*todo*/
+              } break;
+
+              // panning slide
+              case 25:
+              {
+                /*todo*/
+              } break;
+
+              // multi retrig
+              case 27:
+              {
+                /*todo*/
+              } break;
+
+              // tremor
+              case 29:
+              {
+                /*todo*/
               } break;
 
               // extra fine porta
@@ -379,6 +470,7 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
 
   // read instruments
   song_.instruments.resize(num_instruments);
+  song_.samples.resize(num_instruments);
   for(unsigned ii=0; ii<num_instruments; ++ii)
   {
     // read instrument header
@@ -394,7 +486,8 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
       // read common sample info
       uint32 sample_header_size;
       in_file_>>sample_header_size;
-      in_file_.skip(96);
+      uint8 note_sample_map[96];
+      in_file_.read_bytes(note_sample_map, 96);
       uint16 vol_envelope_pnts[24], pan_envelope_pnts[24];
       in_file_.read(vol_envelope_pnts, 24);
       in_file_.read(pan_envelope_pnts, 24);
@@ -422,7 +515,7 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
         in_file_>>smp.compression;
         in_file_.skip(sample_header_size-18);
         smp.volume=smp.volume<64?(smp.volume<<2)|(smp.volume>>4):0xff;
-        song_.total_instrument_data_bytes+=smp.length;
+        song_.total_sample_data_bytes+=smp.length;
       }
 
       // read sample data
@@ -461,33 +554,36 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
         }
       }
 
-      // add first sample as instrument to the song (don't support multiple samples/instrument)
-      xm_sample &smp=inst_samples[0];
-      pmf_instrument &inst=song_.instruments[ii];
-      inst.length=smp.length;
-      inst.loop_start=smp.loop_start;
-      inst.loop_len=smp.type&3?smp.loop_length:0;
-      inst.volume=smp.volume<64?smp.volume<<2:0xff;
-      inst.data=smp.data;
-      inst.c4hz=uint32(8363.0f*pow(1.059463094359f, smp.rel_note+smp.finetune/128.0f)+0.5f);
-      inst.fadeout_speed=vol_env_type&1?vol_fadeout:65535;
+      // add C-5 sample as the instrument to the song (multi-sample instruments not supported)
+      xm_sample &smp=inst_samples[note_sample_map[12*5]];
+      pmf_instrument &pmf_inst=song_.instruments[ii];
+      pmf_inst.sample_idx=ii;
+      pmf_sample &pmf_smp=song_.samples[ii];
+      pmf_smp.length=smp.length;
+      pmf_smp.loop_start=smp.loop_start;
+      pmf_smp.loop_len=smp.type&3?smp.loop_length:0;
+      pmf_smp.volume=smp.volume<64?smp.volume<<2:0xff;
+      pmf_smp.data=smp.data;
+      pmf_smp.finetune=smp.rel_note*128+smp.finetune;
+      song_.total_sample_data_bytes+=smp.length;
+      pmf_inst.fadeout_speed=vol_env_type&1?vol_fadeout:65535;
 
       // set instrument volume envelope
       if(vol_env_type&1)
       {
         if(vol_env_type&2)
-          inst.vol_envelope.sustain_loop_start=inst.vol_envelope.sustain_loop_end=vol_env_sustain_pnt;
+          pmf_inst.vol_envelope.sustain_loop_start=pmf_inst.vol_envelope.sustain_loop_end=vol_env_sustain_pnt;
         if(vol_env_type&4)
         {
-          inst.vol_envelope.loop_start=vol_env_loop_start_pnt;
-          inst.vol_envelope.loop_end=vol_env_loop_end_pnt;
+          pmf_inst.vol_envelope.loop_start=vol_env_loop_start_pnt;
+          pmf_inst.vol_envelope.loop_end=vol_env_loop_end_pnt;
         }
-        inst.vol_envelope.data.resize(num_vol_env_pnts);
+        pmf_inst.vol_envelope.data.resize(num_vol_env_pnts);
         for(unsigned i=0; i<num_vol_env_pnts; ++i)
         {
-          inst.vol_envelope.data[i].first=uint8(vol_envelope_pnts[i*2+0]);
+          pmf_inst.vol_envelope.data[i].first=uint8(vol_envelope_pnts[i*2+0]);
           uint16 vol=vol_envelope_pnts[i*2+1];
-          inst.vol_envelope.data[i].second=uint8(vol<64?vol<<2:255);
+          pmf_inst.vol_envelope.data[i].second=uint8(vol<64?vol<<2:255);
         }
       }
     }
@@ -495,6 +591,6 @@ bool convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
       in_file_.skip(inst_header_size-29);
   }
 
-  return true;
+  return pmferr_ok;
 }
 //----------------------------------------------------------------------------

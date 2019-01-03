@@ -1,7 +1,7 @@
 //============================================================================
-// Spin-X Platform (http://www.spinxplatform.com)
+// Spin-X Platform
 //
-// Copyright (c) 2013, Profoundic Technologies, Inc.
+// Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
 //----------------------------------------------------------------------------
 // Redistribution and use in source and binary forms, with or without
@@ -37,7 +37,7 @@ using namespace pfc;
 //============================================================================
 // convert_mod
 //============================================================================
-bool convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
+e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
 {
   // read signature
   uint32 mod_id;
@@ -51,65 +51,101 @@ bool convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
   {
     // "M.K."
     case 0x2e4b2e4d: max_samples=31; break;
-    // "4CHN"
-    case 0x4e484334: num_channels=4; max_samples=31; break;
-    // "6CHN"
-    case 0x4e484336: num_channels=6; max_samples=31; break;
-    // "8CHN"
-    case 0x4e484338: num_channels=8; max_samples=31; break;
+    // "M!K!"
+    case 0x214b214d: max_samples=31; break;
+    // "M&K!"
+    case 0x214b264d: max_samples=31; break;
+    // "N.T."
+    case 0x2e542e4e: max_samples=31; break;
     // "FLT4"
     case 0x34544c46: num_channels=4; max_samples=31; break;
     // "FLT8"
-    case 0x38544c46: num_channels=4; max_samples=31; break;
+    case 0x38544c46: num_channels=8; max_samples=31; break;
+    // "1CHN"
+    case 0x4e484331: num_channels=1; max_samples=31; break;
+    // "2CHN"
+    case 0x4e484332: num_channels=2; max_samples=31; break;
+    // "3CHN"
+    case 0x4e484333: num_channels=3; max_samples=31; break;
+    // "4CHN"
+    case 0x4e484334: num_channels=4; max_samples=31; break;
+    // "5CHN"
+    case 0x4e484335: num_channels=5; max_samples=31; break;
+    // "6CHN"
+    case 0x4e484336: num_channels=6; max_samples=31; break;
+    // "7CHN"
+    case 0x4e484337: num_channels=7; max_samples=31; break;
+    // "8CHN"
+    case 0x4e484338: num_channels=8; max_samples=31; break;
+    // "9CHN"
+    case 0x4e484339: num_channels=9; max_samples=31; break;
+    // "10CH"
+    case 0x48433031: num_channels=10; max_samples=31; break;
+    // "11CH"
+    case 0x48433131: num_channels=11; max_samples=31; break;
+    // "12CH"
+    case 0x48433231: num_channels=12; max_samples=31; break;
+    // "13CH"
+    case 0x48433331: num_channels=13; max_samples=31; break;
+    // "14CH"
+    case 0x48433431: num_channels=14; max_samples=31; break;
+    // "15CH"
+    case 0x48433531: num_channels=15; max_samples=31; break;
+    // "16CH"
+    case 0x48433631: num_channels=16; max_samples=31; break;
+    // "18CH"
+    case 0x48433831: num_channels=18; max_samples=31; break;
+    // "20CH"
+    case 0x48433032: num_channels=20; max_samples=31; break;
+    // "22CH"
+    case 0x48433232: num_channels=22; max_samples=31; break;
+    // "24CH"
+    case 0x48433432: num_channels=24; max_samples=31; break;
+    // "26CH"
+    case 0x48433632: num_channels=26; max_samples=31; break;
+    // "CH28"
+    case 0x48433832: num_channels=28; max_samples=31; break;
+    // "CH30"
+    case 0x48433033: num_channels=30; max_samples=31; break;
+    // "CH32"
+    case 0x48433233: num_channels=32; max_samples=31; break;
     // unknown
-    default: return false;
+    default: return pmferr_unknown_format;
   }
 
   // setup song
+  char song_name[21]={0};
+  in_file_.read_bytes(song_name, 20);
+  song_.name=song_name;
   song_.num_channels=num_channels;
+  song_.note_period_min=56; // ProTracker limits
+  song_.note_period_max=1712;
 
   // read sample infos
-  in_file_.skip(20);
-  for(unsigned i=0; i<max_samples; ++i)
+  song_.instruments.resize(max_samples);
+  song_.samples.resize(max_samples);
+  for(unsigned si=0; si<max_samples; ++si)
   {
     in_file_.skip(22);
     uint16 len;
     in_file_>>len;
     len=swap_bytes(len)*2;
-    pmf_instrument &inst=song_.instruments.push_back();
-    inst.length=len;
-    song_.total_instrument_data_bytes+=len;
+    pmf_instrument &pmf_inst=song_.instruments[si];
+    pmf_inst.sample_idx=si;
+    pmf_sample &pmf_smp=song_.samples[si];
+    pmf_smp.length=len;
+    song_.total_sample_data_bytes+=len;
     if(len>2)
     {
       uint16 loop_start, loop_len;
       uint8 finetune, volume;
       in_file_>>finetune>>volume>>loop_start>>loop_len;
-      inst.volume=volume<64?volume<<2:255;
-      inst.loop_start=unsigned(swap_bytes(loop_start))*2;
-      inst.loop_len=unsigned(swap_bytes(loop_len))*2;
-      if(inst.loop_len<3)
-        inst.loop_len=0;
-
-      // set finetune
-      switch(finetune)
-      {
-        case  0: inst.c4hz=8363; break;
-        case  1: inst.c4hz=8413; break;
-        case  2: inst.c4hz=8463; break;
-        case  3: inst.c4hz=8529; break;
-        case  4: inst.c4hz=8581; break;
-        case  5: inst.c4hz=8651; break;
-        case  6: inst.c4hz=8723; break;
-        case  7: inst.c4hz=8757; break;
-        case  8: inst.c4hz=7895; break;
-        case  9: inst.c4hz=7941; break;
-        case 10: inst.c4hz=7985; break;
-        case 11: inst.c4hz=8046; break;
-        case 12: inst.c4hz=8107; break;
-        case 13: inst.c4hz=8169; break;
-        case 14: inst.c4hz=8232; break;
-        case 15: inst.c4hz=8280; break;
-      }
+      pmf_smp.volume=volume<64?volume<<2:255;
+      pmf_smp.loop_start=unsigned(swap_bytes(loop_start))*2;
+      pmf_smp.loop_len=unsigned(swap_bytes(loop_len))*2;
+      if(pmf_smp.loop_len<4)
+        pmf_smp.loop_len=0;
+      pmf_smp.finetune=int8(finetune<<4);
     }
     else
       in_file_.skip(6);
@@ -251,6 +287,14 @@ bool convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
               track_row.effect_data=effect_data<0x10?pmffx_vslidetype_down+effect_data:(pmffx_vslidetype_up+(effect_data>>4));
             } break;
 
+            // tremolo
+            case 0x7:
+            {
+              track_row.effect=pmffx_tremolo;
+              track_row.effect_data=effect_data;
+
+            } break;
+
             // set sample offset
             case 0x9:
             {
@@ -319,6 +363,13 @@ bool convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
                   track_row.effect_data=(effect_data&0xf)+0xe0;
                 } break;
 
+                // set glissando on/off
+                case 3:
+                {
+                  track_row.effect=pmffx_subfx;
+                  track_row.effect_data=effect_data?1:0;
+                } break;
+
                 // set vibrato waveform
                 case 4:
                 {
@@ -341,7 +392,17 @@ bool convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
                 case 6:
                 {
                   track_row.effect=pmffx_subfx;
-                  track_row.effect_data=(pmfsubfx_loop_pattern<<num_subfx_value_bits)|(effect_data&0xf);
+                  track_row.effect_data=(pmfsubfx_pattern_loop<<num_subfx_value_bits)|(effect_data&0xf);
+                } break;
+
+                // set tremolo waveform
+                case 7:
+                {
+                  if((effect_data&0xf)<8)
+                  {
+                    track_row.effect=pmffx_subfx;
+                    track_row.effect_data=(pmfsubfx_set_tremolo_wave<<num_subfx_value_bits)|(effect_data&0xf);
+                  }
                 } break;
 
                 // retrigger sample
@@ -365,7 +426,24 @@ bool convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
                   track_row.effect_data=(effect_data&0xf)|pmffx_vslidetype_fine_down;
                 } break;
 
-                // delay pattern
+                // cut sample
+                case 12:
+                {
+                  track_row.effect=pmffx_subfx;
+                  track_row.effect_data=(pmfsubfx_note_cut<<num_subfx_value_bits)|(effect_data&0xf);
+                } break;
+
+                // note delay
+                case 13:
+                {
+                  if(effect_data&0xf)
+                  {
+                    track_row.effect=pmffx_subfx;
+                    track_row.effect_data=(pmfsubfx_note_delay<<num_subfx_value_bits)|(effect_data&0xf);
+                  }
+                } break;
+
+                // pattern delay
                 case 14:
                 {
                   if(effect_data&0xf)
@@ -380,8 +458,11 @@ bool convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
             // set speed
             case 0xf:
             {
-              track_row.effect=pmffx_set_speed_tempo;
-              track_row.effect_data=effect_data?effect_data:1;
+              if(effect_data)
+              {
+                track_row.effect=pmffx_set_speed_tempo;
+                track_row.effect_data=effect_data;
+              }
             } break;
           }
         }
@@ -390,19 +471,19 @@ bool convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
   }
 
   // read sample data
-  unsigned num_instruments=song_.instruments.size();
-  for(unsigned i=0; i<num_instruments; ++i)
+  usize_t num_samples=song_.samples.size();
+  for(usize_t si=0; si<num_samples; ++si)
   {
-    pmf_instrument &inst=song_.instruments[i];
-    if(inst.length>2)
+    pmf_sample &smp=song_.samples[si];
+    if(smp.length>2)
     {
-      inst.data=PFC_MEM_ALLOC(inst.length);
-      in_file_.read_bytes(inst.data.data, inst.length);
+      smp.data=PFC_MEM_ALLOC(smp.length);
+      in_file_.read_bytes(smp.data.data, smp.length);
     }
     else
-      in_file_.skip(inst.length);
+      in_file_.skip(smp.length);
   }
 
-  return true;
+  return pmferr_ok;
 }
 //----------------------------------------------------------------------------

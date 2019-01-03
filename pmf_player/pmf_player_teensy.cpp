@@ -1,7 +1,7 @@
 //============================================================================
-// PMF Player v0.3
+// PMF Player v0.4
 //
-// Copyright (c) 2013, Profoundic Technologies, Inc.
+// Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
 //----------------------------------------------------------------------------
 // Redistribution and use in source and binary forms, with or without
@@ -54,10 +54,10 @@ void playback_interrupt()
 {
   int16_t *smp_addr=s_buffer_playback_pos;
   int16_t smp=*smp_addr;
-  *smp_addr=0x80<<PMF_AUDIO_LEVEL;
-  smp>>=PMF_AUDIO_LEVEL;
+  *smp_addr=0;
+  smp=2048+(smp<<PMF_AUDIO_LEVEL);
   smp=smp<0?0:smp>4095?4095:smp;
-  analogWrite(A14, smp);
+  analogWriteDAC0(smp);
   if(++s_buffer_playback_pos==s_buffer+pmfplayer_audio_buffer_size)
     s_buffer_playback_pos=s_buffer;
 }
@@ -68,11 +68,10 @@ void pmf_player::start_playback()
   // setup pins
   DDRB=0x3f;
   DDRC=0x3f;
-  analogWriteResolution(12);
 
   // clear audio buffer
   for(unsigned i=0; i<pmfplayer_audio_buffer_size; ++i)
-    s_buffer[i]=0x80<<PMF_AUDIO_LEVEL;
+    s_buffer[i]=0;
   s_buffer_playback_pos=s_buffer;
   s_subbuffer_write_idx=1;
 
@@ -98,10 +97,10 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
 
     // get channel attributes
     size_t sample_addr=(size_t)(m_pmf_file+pgm_read_dword(channel->inst_metadata+pmfcfg_offset_inst_offset));
-    uint32_t sample_pos=(long(sample_addr)<<8)+channel->sample_pos;
+    uint32_t sample_pos=channel->sample_pos;
     uint16_t sample_speed=channel->sample_speed;
-    uint16_t sample_end=sample_addr+pgm_read_word(channel->inst_metadata+pmfcfg_offset_inst_length);
-    uint16_t sample_loop_len=pgm_read_word(channel->inst_metadata+pmfcfg_offset_inst_loop_length);
+    uint32_t sample_end=uint32_t(pgm_read_dword(channel->inst_metadata+pmfcfg_offset_inst_length))<<8;
+    uint32_t sample_loop_len=pgm_read_dword(channel->inst_metadata+pmfcfg_offset_inst_loop_length);
     uint8_t sample_volume=(uint16_t(channel->sample_volume)*channel->vol_env_value)>>8;
 
     // mix channel to the buffer
@@ -109,12 +108,19 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
     do
     {
       // add channel sample to buffer
-      int8_t smp=(int8_t)pgm_read_byte(sample_pos>>8);
+#ifdef PMF_LINEAR_INTERPOLATION
+      uint16_t smp=((uint16_t)pgm_read_word(sample_addr+(sample_pos>>8)));
+      uint8_t sample_pos_frc=sample_pos&255;
+      int16_t interp_smp=((int16_t(int8_t(smp&255))*(256-sample_pos_frc))>>8)+((int16_t(int8_t(smp>>8))*sample_pos_frc)>>8);
+      *buf+=int16_t(sample_volume*interp_smp)>>8;
+#else      
+      int8_t smp=(int8_t)pgm_read_byte(sample_addr+(sample_pos>>8));
       *buf+=int16_t(sample_volume*int16_t(smp))>>8;
+#endif
 
       // advance sample position
       sample_pos+=sample_speed;
-      if(uint16_t(sample_pos>>8)>=sample_end)
+      if(sample_pos>=sample_end)
       {
         sample_pos-=long(sample_loop_len)<<8;
         if(!sample_loop_len)
@@ -124,7 +130,7 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
         }
       }
     } while(++buf<buffer_end);
-    channel->sample_pos=sample_pos-(long(sample_addr)<<8);
+    channel->sample_pos=sample_pos;
   } while(++channel!=channel_end);
 
   // advance buffer

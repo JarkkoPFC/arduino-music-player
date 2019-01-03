@@ -1,7 +1,7 @@
 //============================================================================
-// PMF Player v0.3
+// PMF Player v0.4
 //
-// Copyright (c) 2013, Profoundic Technologies, Inc.
+// Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
 //----------------------------------------------------------------------------
 // Redistribution and use in source and binary forms, with or without
@@ -43,6 +43,8 @@ struct pmf_header
   uint32_t file_size;
   uint8_t initial_speed;
   uint8_t initial_tempo;
+  uint16_t note_period_min;
+  uint16_t note_period_max;
   uint16_t playlist_length;
   uint8_t num_channels;
   uint8_t num_patterns;
@@ -60,6 +62,8 @@ struct pmf_header
 enum {pmfcfg_offset_flags=PFC_OFFSETOF(pmf_header, flags)};
 enum {pmfcfg_offset_init_speed=PFC_OFFSETOF(pmf_header, initial_speed)};
 enum {pmfcfg_offset_init_tempo=PFC_OFFSETOF(pmf_header, initial_tempo)};
+enum {pmfcfg_offset_note_period_min=PFC_OFFSETOF(pmf_header, note_period_min)};
+enum {pmfcfg_offset_note_period_max=PFC_OFFSETOF(pmf_header, note_period_max)};
 enum {pmfcfg_offset_playlist_length=PFC_OFFSETOF(pmf_header, playlist_length)};
 enum {pmfcfg_offset_num_channels=PFC_OFFSETOF(pmf_header, num_channels)};
 enum {pmfcfg_offset_num_patterns=PFC_OFFSETOF(pmf_header, num_patterns)};
@@ -83,15 +87,14 @@ enum {pmfcfg_envelope_point_size=2};
 // bit-compression settings
 enum {pmfcfg_num_data_mask_bits=4};
 enum {pmfcfg_num_note_bits=7};       // max 10 octaves (0-9) (12*10=120)
-enum {pmfcfg_num_instrument_bits=5}; // max 32 instruments
+enum {pmfcfg_num_instrument_bits=6}; // max 64 instruments
 enum {pmfcfg_num_volume_bits=6};     // volume range [0, 63]
 enum {pmfcfg_num_effect_bits=4};     // effects 0-15
 enum {pmfcfg_num_effect_data_bits=8};
 // PMF flags
 enum e_pmf_flags
 {
-  pmfflag_fast_note_slides   =0x01,  // regular note slide speeds are multiplied by 4
-  pmfflag_linear_freq_table  =0x02,  // 0=Amiga, 1=linear
+  pmfflag_linear_freq_table  =0x01,  // 0=Amiga, 1=linear
 };
 // PMF special notes
 enum {pmfcfg_note_cut=120};
@@ -112,6 +115,7 @@ enum e_pmf_effect
   pmffx_note_slide,        // [1, 0xdf] = slide, 0=use previous slide value, [0xe0, 0xff]=unused
   pmffx_arpeggio,          // x=[0, 15], y=[0, 15]
   pmffx_vibrato,           // [xxxxyyyy], x=vibrato speed, y=vibrato depth
+  pmffx_tremolo,           // [xxxxyyyy], x=tremolo speed, y=tremolo depth
   pmffx_note_vol_slide,    // [000xyyyy], x=vol slide type (0=down, 1=up), y=vol slide value [1, 15], if y=0, use previous slide type & value (x is ignored).
   pmffx_vibrato_vol_slide, // [000xyyyy], x=vol slide type (0=down, 1=up), y=vol slide value [1, 15], if y=0, use previous slide type & value (x is ignored).
   pmffx_retrig_vol_slide,  // [xxxxyyyy], x=volume slide param, y=sample retrigger frequency
@@ -120,19 +124,30 @@ enum e_pmf_effect
 };
 enum e_pmf_subfx
 {
+  pmfsubfx_set_glissando,    // 0=off, 1=on (when enabled "note slide" slides half a not at a time)
   pmfsubfx_set_finetune,     // [-8, 7]
   pmfsubfx_set_vibrato_wave, // [0xyy], x=[0=retrigger, 1=no retrigger], yy=vibrato wave=[0=sine, 1=ramp down, 2=square, 3=random]
+  pmfsubfx_set_tremolo_wave, // [0xyy], x=[0=retrigger, 1=no retrigger], yy=tremolo wave=[0=sine, 1=ramp down, 2=square, 3=random]
   pmfsubfx_pattern_delay,    // [1, 15]
-  pmfsubfx_loop_pattern,     // [0, 15], 0=set loop start
+  pmfsubfx_pattern_loop,     // [0, 15], 0=set loop start, >0 = loop N times from loop start
+  pmfsubfx_note_cut,         // [0, 15], cut on X tick
+  pmfsubfx_note_delay,       // [0, 15], delay X ticks
+};
+enum e_pmf_volfx
+{
+  pmfvolfx_volume_slide,
+  pmfvolfx_note_slide,
+  pmfvolfx_vibrato,
 };
 enum e_pmfx_vslide_type
 {
-  pmffx_vslidetype_down      =0x00,
-  pmffx_vslidetype_up        =0x10,
-  pmffx_vslidetype_fine_down =0x20,
-  pmffx_vslidetype_fine_up   =0x30,
+  pmffx_vslidetype_down       =0x00,
+  pmffx_vslidetype_up         =0x10,
+  pmffx_vslidetype_fine_down  =0x20,
+  pmffx_vslidetype_fine_up    =0x30,
   //----
-  pmffx_vslidetype_mask      =0x30
+  pmffx_vslidetype_mask       =0x30,
+  pmffx_vsslidetype_fine_mask =0x20
 };
 // waveform tables
 static const uint8_t PROGMEM s_waveforms[3][32]=
@@ -147,7 +162,8 @@ static const uint8_t PROGMEM s_waveforms[3][32]=
 //===========================================================================
 // PMF note periods
 //===========================================================================
-enum {min_period=28, max_period=27392};
+enum {note_slide_down_target_period=32767};
+enum {note_slide_up_target_period=1};
 //---------------------------------------------------------------------------
 
 
@@ -202,22 +218,22 @@ namespace
   //=========================================================================
   // get_note_period
   //=========================================================================
-  uint16_t get_note_period(uint8_t note_idx_, uint8_t flags_)
+  uint16_t get_note_period(uint8_t note_idx_, int16_t finetune_, uint8_t flags_)
   {
     if(flags_&pmfflag_linear_freq_table)
-      return 7680-note_idx_*64;
-    return uint16_t(27392.0f/exp2(note_idx_/12.0f)+0.5f);
+      return 7680-note_idx_*64-finetune_/2;
+    return uint16_t(27392.0f/exp2((note_idx_*128+finetune_)/(12.0f*128.0f))+0.5f);
   }
   //-------------------------------------------------------------------------
 
   //=========================================================================
   // get_sample_speed
   //=========================================================================
-  uint16_t get_sample_speed(uint16_t note_period_, uint16_t c4hz_, uint8_t flags_)
+  uint16_t get_sample_speed(uint16_t note_period_, uint8_t flags_)
   {
     if(flags_&pmfflag_linear_freq_table)
-      return uint16_t((c4hz_*32.0f/pmfplayer_sampling_rate)*exp2(float(7680-note_period_)/768.0f)+0.5f);
-    return uint16_t((c4hz_*1024.0f*7093789.2/pmfplayer_sampling_rate)/(8363.0f*note_period_)+0.5f);
+      return uint16_t((8363.0f*8.0f/pmfplayer_sampling_rate)*exp2(float(7680-note_period_)/768.0f)+0.5f);
+    return uint16_t((7093789.2f*256.0f/pmfplayer_sampling_rate)/note_period_+0.5f);
   }
 } // namespace <anonymous>
 //---------------------------------------------------------------------------
@@ -246,7 +262,7 @@ void pmf_player::start(const void *pmem_pmf_file_)
   m_flags=pgm_read_word(m_pmf_file+pmfcfg_offset_flags);
   m_pmf_instrument_meta=m_pmf_file+((pmfcfg_offset_playlist+pgm_read_word(m_pmf_file+pmfcfg_offset_playlist_length)+3)&-4);
   m_pmf_pattern_meta=m_pmf_instrument_meta+sizeof(pmf_instrument_header)*pgm_read_byte(m_pmf_file+pmfcfg_offset_num_instruments);
-  m_note_slide_speed=m_flags&pmfflag_fast_note_slides?4:2;
+  m_note_slide_speed=m_flags&pmfflag_linear_freq_table?4:2;
 
   // initialize channels
   memset(m_channels, 0, sizeof(m_channels));
@@ -254,11 +270,14 @@ void pmf_player::start(const void *pmem_pmf_file_)
   {
     audio_channel &chl=m_channels[ci];
     chl.fxmem_vibrato_wave=0x04;
+    chl.fxmem_vol_slide_spd=pmffx_vslidetype_down|0x01;
   }
 
   // init playback state
   init_pattern(0);
   m_speed=pgm_read_byte(m_pmf_file+pmfcfg_offset_init_speed);
+  m_note_period_min=pgm_read_word(m_pmf_file+pmfcfg_offset_note_period_min);
+  m_note_period_max=pgm_read_word(m_pmf_file+pmfcfg_offset_note_period_max);
   m_num_batch_samples=(long(pmfplayer_sampling_rate)*125)/long(pgm_read_byte(m_pmf_file+pmfcfg_offset_init_tempo)*50);
   m_current_row_tick=m_speed-1;
   m_arpeggio_counter=0;
@@ -314,78 +333,85 @@ void pmf_player::update()
 }
 //---------------------------------------------------------------------------
 
+void pmf_player::apply_channel_effect_volume_slide(audio_channel &chl_)
+{
+  // slide volume either up/down defined by effect
+  int8_t vdelta=(chl_.fxmem_vol_slide_spd&0xf)<<2;
+  int16_t v=int16_t(chl_.sample_volume)+((chl_.fxmem_vol_slide_spd&pmffx_vslidetype_mask)==pmffx_vslidetype_down?-vdelta:vdelta);
+  chl_.sample_volume=v<0?0:v>255?255:v;
+}
+//----
+
+void pmf_player::apply_channel_effect_note_slide(audio_channel &chl_)
+{
+  // slide note period towards target period and clamp the period to target
+  int16_t note_period=chl_.note_period;
+  int16_t note_target_prd=chl_.fxmem_note_slide_prd;
+  int16_t slide_spd=(note_period<note_target_prd?chl_.fxmem_note_slide_spd:-chl_.fxmem_note_slide_spd)*m_note_slide_speed;
+  note_period+=slide_spd;
+  note_period=((slide_spd>0)^(note_period<note_target_prd))?note_target_prd:note_period;
+  chl_.note_period=note_period;
+  chl_.sample_speed=note_period<m_note_period_min || note_period>m_note_period_max?0:get_sample_speed(chl_.note_period, m_flags);
+}
+//----
+
+void pmf_player::apply_channel_effect_vibrato(audio_channel &chl_)
+{
+  uint8_t wave_idx=chl_.fxmem_vibrato_wave&3;
+  int8_t vibrato_pos=chl_.fxmem_vibrato_pos;
+  int8_t wave_sample=vibrato_pos<0?-int8_t(pgm_read_byte(&s_waveforms[wave_idx][32+vibrato_pos])):pgm_read_byte(&s_waveforms[wave_idx][vibrato_pos]);
+  chl_.sample_speed=get_sample_speed(chl_.note_period+(int16_t(wave_sample*chl_.fxmem_vibrato_depth)>>8), m_flags);
+  if((chl_.fxmem_vibrato_pos+=chl_.fxmem_vibrato_spd)>31)
+    chl_.fxmem_vibrato_pos-=64;
+}
+//----
+
 void pmf_player::apply_channel_effects()
 {
   m_arpeggio_counter=(m_arpeggio_counter+1)%3;
   for(unsigned ci=0; ci<m_num_playback_channels; ++ci)
   {
-    // apply active effect
+    // apply active volume effect
     audio_channel &chl=m_channels[ci];
+    switch(chl.vol_effect)
+    {
+      case pmfvolfx_volume_slide: apply_channel_effect_volume_slide(chl); break;
+      case pmfvolfx_note_slide: apply_channel_effect_note_slide(chl); break;
+      case pmfvolfx_vibrato: apply_channel_effect_vibrato(chl); break;
+    }
+    
+    // apply active effect
     switch(chl.effect)
     {
       case pmffx_arpeggio:
       {
         // alternate between 3 periods defined by arpeggio parameters
-        uint16_t note_period=get_note_period((chl.base_note_idx&127)+((chl.effect_data>>(4*m_arpeggio_counter))&0xf), m_flags);
-        chl.sample_speed=get_sample_speed(note_period, chl.sample_c4hz, m_flags);
+        if(uint8_t base_note_idx=chl.base_note_idx&127)
+        {
+          uint16_t note_period=get_note_period(base_note_idx+((chl.fxmem_arpeggio>>(4*m_arpeggio_counter))&0xf), chl.sample_finetune, m_flags);
+          chl.sample_speed=get_sample_speed(note_period, m_flags);
+        }
       } break;
 
-      case pmffx_note_slide_up:
-      {
-        // slide note period down to minimum period
-        chl.note_period-=int(chl.effect_data)*m_note_slide_speed;
-        if(int16_t(chl.note_period)<min_period)
-          chl.note_period=min_period;
-        chl.sample_speed=get_sample_speed(chl.note_period, chl.sample_c4hz, m_flags);
-      } break;
-
-      case pmffx_note_slide_down:
-      {
-        // slide note period up to max period
-        chl.note_period+=int(chl.effect_data)*m_note_slide_speed;
-        if(chl.note_period>max_period)
-          chl.note_period=max_period;
-        chl.sample_speed=get_sample_speed(chl.note_period, chl.sample_c4hz, m_flags);
-      } break;
-
-      case pmffx_note_slide:
+      case pmffx_note_slide: apply_channel_effect_note_slide(chl); break;
+      
       case pmffx_note_vol_slide:
       {
-        // slide note period towards target period and clamp the period to target
-        int16_t note_period=chl.note_period;
-        int16_t note_target_prd=chl.fxmem_note_slide_prd;
-        int16_t slide_spd=(note_period<note_target_prd?chl.fxmem_note_slide_spd:-chl.fxmem_note_slide_spd)*m_note_slide_speed;
-        note_period+=slide_spd;
-        chl.note_period=((slide_spd>0)^(note_period<note_target_prd))?note_target_prd:note_period;
-        chl.sample_speed=get_sample_speed(chl.note_period, chl.sample_c4hz, m_flags);
-
-        // check for additional volume slide
-        if(chl.effect==pmffx_note_vol_slide)
-          goto pmffx_volume_slide;
+        if(chl.fxmem_note_slide_spd<0xe0)
+          apply_channel_effect_note_slide(chl);
+        if(!(chl.fxmem_vol_slide_spd&pmffx_vsslidetype_fine_mask))
+          apply_channel_effect_volume_slide(chl);
       } break;
 
-      case pmffx_volume_slide:
-      {
-        // slide volume either up/down defined by effect
-        pmffx_volume_slide:
-        int8_t vdelta=(chl.fxmem_vol_slide_spd&0xf)<<2;
-        int16_t v=int16_t(chl.sample_volume)+((chl.fxmem_vol_slide_spd&pmffx_vslidetype_mask)==pmffx_vslidetype_down?-vdelta:vdelta);
-        chl.sample_volume=v<0?0:v>255?255:v;
-      } break;
+      case pmffx_volume_slide: apply_channel_effect_volume_slide(chl); break;
 
-      case pmffx_vibrato:
+      case pmffx_vibrato: apply_channel_effect_vibrato(chl); break;
+      
       case pmffx_vibrato_vol_slide:
       {
-        uint8_t wave_idx=chl.fxmem_vibrato_wave&3;
-        int8_t vibrato_pos=chl.fxmem_vibrato_pos;
-        int8_t wave_sample=vibrato_pos<0?-int8_t(pgm_read_byte(&s_waveforms[wave_idx][32-vibrato_pos])):pgm_read_byte(&s_waveforms[wave_idx][vibrato_pos]);
-        chl.sample_speed=get_sample_speed(chl.note_period+(int16_t(wave_sample*chl.fxmem_vibrato_depth)>>8), chl.sample_c4hz, m_flags);
-        if((chl.fxmem_vibrato_pos+=chl.fxmem_vibrato_spd)>31)
-          chl.fxmem_vibrato_pos-=64;
-
-        // check for additional volume slide
-        if(chl.effect==pmffx_vibrato_vol_slide)
-          goto pmffx_volume_slide;
+        apply_channel_effect_vibrato(chl);
+        if(!(chl.fxmem_vol_slide_spd&pmffx_vsslidetype_fine_mask))
+          apply_channel_effect_volume_slide(chl);
       } break;
 
       case pmffx_retrig_vol_slide:
@@ -411,6 +437,26 @@ void pmf_player::apply_channel_effects()
           chl.sample_volume=vol<0?0:vol>255?255:vol;
           chl.sample_pos=0;
           chl.note_hit=1;
+        }
+      } break;
+
+      case pmffx_subfx|(pmfsubfx_note_cut<<pmfcfg_num_effect_bits):
+      {
+        // cut note after given number of ticks
+        if(!--chl.effect_data)
+        {
+          chl.sample_speed=0;
+          chl.effect=0xff;
+        }
+      } break;
+
+      case pmffx_subfx|(pmfsubfx_note_delay<<pmfcfg_num_effect_bits):
+      {
+        // hit note after given number of ticks
+        if(!--chl.effect_data)
+        {
+          hit_note(chl, chl.fxmem_note_delay_idx, 0);
+          chl.effect=0xff;
         }
       } break;
     }
@@ -486,6 +532,89 @@ void pmf_player::evaluate_envelopes()
 }
 //----
 
+bool pmf_player::init_effect_volume_slide(audio_channel &chl_, uint8_t effect_data_)
+{
+  // check for volume slide data or read from effect memory
+  if(effect_data_&0xf)
+    chl_.fxmem_vol_slide_spd=effect_data_;
+  effect_data_=chl_.fxmem_vol_slide_spd;
+
+  if(effect_data_&pmffx_vsslidetype_fine_mask)
+  {
+    // fine slide
+    uint8_t fx_type=effect_data_&pmffx_vslidetype_mask;
+    int8_t vdelta=(effect_data_&0xf)<<2;
+    int16_t v=int16_t(chl_.sample_volume)+(fx_type==pmffx_vslidetype_fine_down?-vdelta:vdelta);
+    chl_.sample_volume=v<0?0:v>255?255:v;
+    return false;
+  }
+  return true;
+}
+//----
+
+bool pmf_player::init_effect_note_slide(audio_channel &chl_, uint8_t slide_speed_, uint16_t target_note_period_)
+{
+  // update note slide effect memory and check for regular note slide
+  if(slide_speed_)
+    chl_.fxmem_note_slide_spd=slide_speed_;
+  else
+    slide_speed_=chl_.fxmem_note_slide_spd;
+  if(target_note_period_)
+    chl_.fxmem_note_slide_prd=target_note_period_;
+  if(slide_speed_<0xe0)
+    return true;
+
+  // apply fine/extra-fine note slide
+  if(!chl_.sample_speed)
+    return false;
+  int16_t note_period=chl_.note_period;
+  int16_t slide_spd=slide_speed_>=0xf0?(slide_speed_-0xf0)*4:(slide_speed_-0xe0);
+  if(note_period>target_note_period_)
+    slide_spd=-slide_spd;
+  note_period+=slide_spd;
+  if((slide_spd>0)^(note_period<target_note_period_))
+    note_period=target_note_period_;
+  chl_.note_period=note_period;
+  chl_.sample_speed=note_period<m_note_period_min || note_period>m_note_period_max?0:get_sample_speed(note_period, m_flags);
+  return false;
+}
+//----
+
+void pmf_player::init_effect_vibrato(audio_channel &chl_, uint8_t vibrato_depth_, uint8_t vibrato_speed_)
+{
+  // update vibrato attributes
+  if(vibrato_depth_)
+    chl_.fxmem_vibrato_depth=vibrato_depth_<<2;
+  if(vibrato_speed_)
+    chl_.fxmem_vibrato_spd=vibrato_speed_;
+  
+  // check for vibrato retrigger
+  if(chl_.fxmem_vibrato_wave&0x4)
+  {
+    uint8_t wave_idx=chl_.fxmem_vibrato_wave&3;
+    int8_t vibrato_pos=chl_.fxmem_vibrato_pos;
+    int8_t wave_sample=vibrato_pos<0?-int8_t(pgm_read_byte(&s_waveforms[wave_idx][32+vibrato_pos])):pgm_read_byte(&s_waveforms[wave_idx][vibrato_pos]);
+    chl_.sample_speed=get_sample_speed(chl_.note_period+(int16_t(wave_sample*chl_.fxmem_vibrato_depth)>>8), m_flags);
+    if((chl_.fxmem_vibrato_pos+=chl_.fxmem_vibrato_spd)>31)
+      chl_.fxmem_vibrato_pos-=64;
+  }
+  else
+    chl_.fxmem_vibrato_pos=0;
+}
+//----
+
+void pmf_player:: hit_note(audio_channel &chl_, uint8_t note_idx_, uint32_t sample_start_pos_)
+{
+  chl_.note_period=get_note_period(note_idx_, chl_.sample_finetune, m_flags);
+  chl_.base_note_idx=note_idx_;
+  chl_.sample_pos=sample_start_pos_;
+  chl_.sample_speed=get_sample_speed(chl_.note_period, m_flags);
+  chl_.note_hit=1;
+  chl_.vol_env_tick=0;
+  chl_.vol_env_pos=-1;
+}
+//----
+
 void pmf_player::process_pattern_row()
 {
   // store current track positions
@@ -530,12 +659,72 @@ void pmf_player::process_pattern_row()
       const uint8_t *inst_metadata=m_pmf_instrument_meta+inst_idx*pmfcfg_instrument_metadata_size;
       chl.inst_metadata=inst_metadata;
       chl.sample_volume=pgm_read_byte(inst_metadata+pmfcfg_offset_inst_volume);
-      chl.sample_c4hz=pgm_read_word(inst_metadata+pmfcfg_offset_inst_c4hz);
+      chl.sample_finetune=pgm_read_word(inst_metadata+pmfcfg_offset_inst_finetune);
     }
 
-    // check for volume
+    // check for volume or volume effect
+    chl.vol_effect=0xff;
     if(volume!=0xff)
-      chl.sample_volume=(volume<<2)|(volume>>4);
+    {
+      if(volume<(1<<pmfcfg_num_volume_bits))
+        chl.sample_volume=(volume<<2)|(volume>>4);
+      else
+      {
+        // initialize volume effect
+        uint8_t volfx_data=volume&0xf;
+        switch(volume&0xf0)
+        {
+          // volume slide
+          case 0x40:
+          case 0x50:
+          case 0x60:
+          case 0x70:
+          {
+            if(init_effect_volume_slide(chl, volume&0x3f))
+              chl.vol_effect=pmfvolfx_volume_slide;
+          } break;
+
+          // note slide down
+          case 0x80:
+          {
+            // init note slide down and disable note retrigger
+            if(init_effect_note_slide(chl, volfx_data, note_slide_down_target_period))
+              chl.vol_effect=pmfvolfx_note_slide;
+          } break;
+          
+          // note slide up
+          case 0x90:
+          {
+            // init note slide up and disable note retrigger
+            if(init_effect_note_slide(chl, volfx_data, note_slide_up_target_period))
+              chl.vol_effect=pmfvolfx_note_slide;
+          } break;
+
+          // note slide
+          case 0xa0:
+          {
+            // init note slide and disable note retrigger
+            if(init_effect_note_slide(chl, volfx_data, note_idx!=0xff?get_note_period(note_idx, chl.sample_finetune, m_flags):0))
+              chl.vol_effect=pmfvolfx_note_slide;
+            note_idx=0xff;
+          } break;
+
+          // set vibrato speed
+          case 0xb0:
+          {
+            if(volfx_data)
+              chl.fxmem_vibrato_spd=volfx_data;
+          } break;
+
+          // vibrato
+          case 0xc0:
+          {
+            init_effect_vibrato(chl, volfx_data, 0);
+            chl.vol_effect=pmfvolfx_vibrato;
+          } break;
+        }
+      }
+    }
 
     // get effect
     chl.effect=0xff;
@@ -546,7 +735,7 @@ void pmf_player::process_pattern_row()
       {
         case pmffx_set_speed_tempo:
         {
-          if(effect_data<=32)
+          if(effect_data<32)
             m_speed=effect_data;
           else
             m_num_batch_samples=(long(pmfplayer_sampling_rate)*125)/long(effect_data*50);
@@ -564,121 +753,64 @@ void pmf_player::process_pattern_row()
           num_skip_rows=effect_data;
         } break;
 
-        case pmffx_arpeggio:
+        case pmffx_volume_slide:
         {
-          chl.effect=pmffx_arpeggio;
-          chl.effect_data=effect_data;
+          if(init_effect_volume_slide(chl, effect_data))
+            chl.effect=pmffx_volume_slide;
         } break;
 
         case pmffx_note_slide_down:
         {
-          // check for slide data or read from effect memory
-          if(effect_data)
-            chl.effect_data=effect_data;
-          else
-            effect_data=chl.effect_data;
-
-          // check for extra-fine/fine slide
-          if(effect_data>=0xe0)
-          {
-            chl.note_period+=effect_data>=0xf0?(effect_data-0xf0)*4:(effect_data-0xe0);
-            if(chl.note_period>max_period)
-              chl.note_period=max_period;
-            if(chl.sample_speed)
-              chl.sample_speed=get_sample_speed(chl.note_period, chl.sample_c4hz, m_flags);
-          }
-          else
-          {
-            // regular note slide down
-            chl.effect=pmffx_note_slide_down;
-          }
+          if(init_effect_note_slide(chl, effect_data, note_slide_down_target_period))
+            chl.effect=pmffx_note_slide;
         } break;
 
         case pmffx_note_slide_up:
         {
-          // check for slide data or read from effect memory
-          if(effect_data)
-            chl.effect_data=effect_data;
-          else
-            effect_data=chl.effect_data;
-
-          // check for extra-fine/fine slide
-          if(effect_data>=0xe0)
-          {
-            chl.note_period-=effect_data>=0xf0?(effect_data-0xf0)*4:(effect_data-0xe0);
-            if(int16_t(chl.note_period)<min_period)
-              chl.note_period=min_period;
-            if(chl.sample_speed)
-              chl.sample_speed=get_sample_speed(chl.note_period, chl.sample_c4hz, m_flags);
-          }
-          else
-          {
-            // regular note slide up
-            chl.effect=pmffx_note_slide_up;
-          }
+          if(init_effect_note_slide(chl, effect_data, note_slide_up_target_period))
+            chl.effect=pmffx_note_slide;
         } break;
 
         case pmffx_note_slide:
         {
-          // update note slide effect memory
-          if(effect_data)
-            chl.fxmem_note_slide_spd=effect_data;
-          if(note_idx!=0xff)
-            chl.fxmem_note_slide_prd=get_note_period(note_idx, m_flags);
-
-          // disable note retrigger
-          chl.effect=pmffx_note_slide;
+          // init note slide and disable retrigger
+          if(init_effect_note_slide(chl, effect_data, note_idx!=0xff?get_note_period(note_idx, chl.sample_finetune, m_flags):0))
+            chl.effect=pmffx_note_slide;
           note_idx=0xff;
         } break;
 
-        case pmffx_note_vol_slide:
-        case pmffx_vibrato_vol_slide:
-        case pmffx_volume_slide:
+        case pmffx_arpeggio:
         {
-          // check for volume slide data or read from effect memory
-          if(effect_data&0xf)
-            chl.fxmem_vol_slide_spd=effect_data;
-          effect_data=chl.fxmem_vol_slide_spd;
-
-          // init proper slide
-          uint8_t fx_type=effect_data&pmffx_vslidetype_mask;
-          if(fx_type==pmffx_vslidetype_fine_down || fx_type==pmffx_vslidetype_fine_up)
-          {
-            // fine slide
-            int8_t vdelta=(effect_data&0xf)<<2;
-            int16_t v=int16_t(chl.sample_volume)+(fx_type==pmffx_vslidetype_fine_down?-vdelta:vdelta);
-            chl.sample_volume=v<0?0:v>255?255:v;
-          }
-          else
-          {
-            // regular volume slide
-            chl.effect=effect;
-          }
+          chl.effect=pmffx_arpeggio;
+          if(effect_data)
+            chl.fxmem_arpeggio=effect_data;
         } break;
 
         case pmffx_vibrato:
         {
           // update vibrato attributes
-          uint8_t vdepth=effect_data&0x0f;
-          if(vdepth)
-            chl.fxmem_vibrato_depth=vdepth<<3;
-          if(effect_data&0xf0)
-            chl.fxmem_vibrato_spd=effect_data>>4;
-
-          // check for vibrato retrigger
-          if(chl.fxmem_vibrato_wave&0x4)
-          {
-            uint8_t wave_idx=chl.fxmem_vibrato_wave&3;
-            int8_t vibrato_pos=chl.fxmem_vibrato_pos;
-            int8_t wave_sample=vibrato_pos<0?-int8_t(pgm_read_byte(&s_waveforms[wave_idx][32-vibrato_pos])):pgm_read_byte(&s_waveforms[wave_idx][vibrato_pos]);
-            if(chl.sample_speed)
-              chl.sample_speed=get_sample_speed(chl.note_period+(int16_t(wave_sample*chl.fxmem_vibrato_depth)>>8), chl.sample_c4hz, m_flags);
-            if((chl.fxmem_vibrato_pos+=chl.fxmem_vibrato_spd)>31)
-              chl.fxmem_vibrato_pos-=64;
-          }
-          else
-            chl.fxmem_vibrato_pos=0;
+          init_effect_vibrato(chl, effect_data&0x0f, effect_data>>4);
           chl.effect=pmffx_vibrato;
+        } break;
+
+        case pmffx_tremolo:
+        {
+          /*todo*/
+        } break;
+
+        case pmffx_note_vol_slide:
+        {
+          init_effect_note_slide(chl, 0, note_idx!=0xff?get_note_period(note_idx, chl.sample_finetune, m_flags):0);
+          init_effect_volume_slide(chl, effect_data);
+          chl.effect=pmffx_note_vol_slide;
+          note_idx=0xff;
+        } break;
+        
+        case pmffx_vibrato_vol_slide:
+        {
+          init_effect_vibrato(chl, 0, 0);
+          init_effect_volume_slide(chl, effect_data);
+          chl.effect=pmffx_vibrato_vol_slide;
         } break;
 
         case pmffx_retrig_vol_slide:
@@ -700,11 +832,16 @@ void pmf_player::process_pattern_row()
         {
           switch(effect_data>>4)
           {
+            case pmfsubfx_set_glissando:
+            {
+              /*todo*/
+            } break;
+
             case pmfsubfx_set_finetune:
             {
               if(inst_idx!=0xff)
               {
-                //todo: should move C4hz values of instruments to RAM
+                /*todo: should move C4hz values of instruments to RAM*/
               }
             } break;
 
@@ -714,12 +851,17 @@ void pmf_player::process_pattern_row()
               chl.fxmem_vibrato_wave=(wave<3?wave:m_batch_pos%3)|(effect_data&4);
             } break;
 
+            case pmfsubfx_set_tremolo_wave:
+            {
+              /*todo*/
+            } break;
+
             case pmfsubfx_pattern_delay:
             {
               m_pattern_delay=(effect_data&0xf)+1;
             } break;
 
-            case pmfsubfx_loop_pattern:
+            case pmfsubfx_pattern_loop:
             {
               effect_data&=0xf;
               if(effect_data)
@@ -744,6 +886,20 @@ void pmf_player::process_pattern_row()
                 }
               }
             } break;
+
+            case pmfsubfx_note_cut:
+            {
+              chl.effect=pmffx_subfx|(pmfsubfx_note_cut<<pmfcfg_num_effect_bits);
+              chl.effect_data=effect_data&0xf;
+            } break;
+
+            case pmfsubfx_note_delay:
+            {
+              chl.effect=pmffx_subfx|(pmfsubfx_note_delay<<pmfcfg_num_effect_bits);
+              chl.effect_data=effect_data&0xf;
+              chl.fxmem_note_delay_idx=note_idx;
+              note_idx=0xff;
+            } break;
           }
         } break;
       }
@@ -751,15 +907,7 @@ void pmf_player::process_pattern_row()
 
     // check for note hit
     if(note_idx!=0xff)
-    {
-      chl.note_period=get_note_period(note_idx, m_flags);
-      chl.base_note_idx=note_idx;
-      chl.sample_pos=sample_start_pos*long(65536);
-      chl.sample_speed=get_sample_speed(chl.note_period, chl.sample_c4hz, m_flags);
-      chl.note_hit=1;
-      chl.vol_env_tick=0;
-      chl.vol_env_pos=-1;
-    }
+      hit_note(chl, note_idx, sample_start_pos*long(65536));
   }
 
   // check for pattern loop
@@ -807,7 +955,7 @@ void pmf_player::process_track_row(audio_channel &chl_, uint8_t &note_idx_, uint
   }
   if(read_dmask)
   {
-    data_mask=read_bits(chl_.track_pos, chl_.track_bit_pos, chl_.decomp_type&4?8:4)&(chl_.decomp_type&4?0xff:0x0f);
+    data_mask=read_bits(chl_.track_pos, chl_.track_bit_pos, chl_.decomp_type&0x4?8:4)&(chl_.decomp_type&4?0xff:0x0f);
     chl_.decomp_buf[5][1]=chl_.decomp_buf[5][0];
     chl_.decomp_buf[5][0]=data_mask;
   }
@@ -843,7 +991,8 @@ void pmf_player::process_track_row(audio_channel &chl_, uint8_t &note_idx_, uint
   {
     case 0x04:
     {
-      volume_=read_bits(chl_.track_pos, chl_.track_bit_pos, pmfcfg_num_volume_bits)&((1<<pmfcfg_num_volume_bits)-1);
+      uint8_t num_volume_bits=chl_.decomp_type&0x8?pmfcfg_num_volume_bits+2:pmfcfg_num_volume_bits;
+      volume_=read_bits(chl_.track_pos, chl_.track_bit_pos, num_volume_bits)&((1<<num_volume_bits)-1);
       chl_.decomp_buf[2][1]=chl_.decomp_buf[2][0];
       chl_.decomp_buf[2][0]=volume_;
     } break;
@@ -886,7 +1035,7 @@ void pmf_player::init_pattern(uint8_t playlist_pos_, uint8_t row_)
     audio_channel &chl=m_channels[ci];
     chl.track_pos=m_pmf_file+pgm_read_word(pattern+pmfcfg_offset_pattern_metadata_track_offsets+ci*pmfcfg_pattern_metadata_track_offset_size);
     chl.track_bit_pos=0;
-    chl.decomp_type=read_bits(chl.track_pos, chl.track_bit_pos, 3)&7;
+    chl.decomp_type=read_bits(chl.track_pos, chl.track_bit_pos, 4)&15;
     chl.track_loop_pos=chl.track_pos;
     chl.track_loop_bit_pos=chl.track_bit_pos;
 

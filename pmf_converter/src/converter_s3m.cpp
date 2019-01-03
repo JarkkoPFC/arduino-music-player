@@ -1,7 +1,7 @@
 //============================================================================
-// Spin-X Platform (http://www.spinxplatform.com)
+// Spin-X Platform
 //
-// Copyright (c) 2013, Profoundic Technologies, Inc.
+// Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
 //----------------------------------------------------------------------------
 // Redistribution and use in source and binary forms, with or without
@@ -37,7 +37,7 @@ using namespace pfc;
 //============================================================================
 // convert_s3m
 //============================================================================
-bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
+e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
 {
   // check for S3M file
   in_file_.skip(0x2c);
@@ -45,25 +45,40 @@ bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
   in_file_>>s3m_id;
   in_file_.rewind();
   if(s3m_id!=0x4d524353)
-    return false;
+    return pmferr_unknown_format;
 
   // read s3m header
   uint16 num_orders, num_inst, num_patterns, flags, tracker_ver, ffi;
   uint8 global_vol, master_vol, init_speed, init_tempo, usnd_cr, dpp;
   uint8 chl_settings[32];
-  in_file_.skip(0x20);
+  char song_name[29]={0};
+  in_file_.read_bytes(song_name, 28);
+  in_file_.skip(4);
   in_file_>>num_orders>>num_inst>>num_patterns>>flags>>tracker_ver>>ffi;
   in_file_.skip(4);
   in_file_>>global_vol>>init_speed>>init_tempo>>master_vol>>usnd_cr>>dpp;
   in_file_.skip(10);
   in_file_.read_bytes(chl_settings, 32);
-  PFC_CHECK_MSG((flags&64)==0, ("S3M ST3.0 volume slides not supported"));
+  if(flags&64)
+    warnf("Warning: S3M ST3.0 volume slides not supported\r\n");
 
   // setup song
+  song_.name=song_name;
   song_.num_channels=32;
-  song_.flags=(flags&4)?0:pmfflag_fast_note_slides;
+  song_.flags=0;
   song_.initial_speed=init_speed?init_speed:6;
   song_.initial_tempo=init_tempo<32?125:init_tempo;
+  if(flags&0x10)
+  {
+    // Amiga limits
+    song_.note_period_min=113;
+    song_.note_period_max=856;
+  }
+  else
+  {
+    song_.note_period_min=28;
+    song_.note_period_max=27392;
+  }
 
   // read orders
   array<uint8> orders;
@@ -92,10 +107,11 @@ bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
 
   // read instruments
   song_.instruments.resize(num_inst);
-  for(unsigned i=0; i<num_inst; ++i)
+  song_.samples.resize(num_inst);
+  for(unsigned ii=0; ii<num_inst; ++ii)
   {
     // read instrument parameters
-    unsigned file_offset=inst_pptrs[i]*16;
+    unsigned file_offset=inst_pptrs[ii]*16;
     in_file_.seek(file_offset);
     uint32 length, loop_begin, loop_end, data_offset=0;
     uint16 c2spd;
@@ -114,27 +130,45 @@ bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
     if(type)
     {
       // check instrument type
-      PFC_CHECK_MSG(type==1, ("S3M loader doesn't support Adlib instruments"))
-      PFC_CHECK_MSG((flags&2)==0, ("S3M loader doesn't support stereo samples"));
-      PFC_CHECK_MSG((flags&4)==0, ("S3M loader doesn't support 16-bit samples"));
-      PFC_CHECK_MSG(packed==0, ("S3M loader doesn't support ADPCM packed samples"));
+      if(type!=1)
+      {
+        warnf("Warning: S3M loader doesn't support Adlib instruments - Skipping instrument #%i\r\n", ii);
+        continue;
+      }
+      if(flags&2)
+      {
+        warnf("Warning: S3M loader doesn't support stereo samples - Skipping instrument #%i\r\n", ii);
+        continue;
+      }
+      if(flags&4)
+      {
+        warnf("Warning: S3M loader doesn't support 16-bit samples - Skipping instrument #%i\r\n", ii);
+        continue;
+      }
+      if(packed!=0)
+      {
+        warnf("Warning: S3M loader doesn't support ADPCM packed samples - Skipping instrument #%i\r\n", ii);
+        continue;
+      }
 
       // set instrument data
-      song_.total_instrument_data_bytes+=length;
-      pmf_instrument &inst=song_.instruments[i];
-      inst.length=uint16(length);
-      inst.loop_start=has_loop?uint16(loop_begin):0;
-      inst.loop_len=has_loop?uint16(loop_end-loop_begin):0;
-      inst.c4hz=c2spd;
-      inst.volume=volume<64?(volume<<2)|(volume>>4):0xff;
-      inst.data=PFC_MEM_ALLOC(inst.length);
+      song_.total_sample_data_bytes+=length;
+      pmf_instrument &pmf_inst=song_.instruments[ii];
+      pmf_inst.sample_idx=ii;
+      pmf_sample &pmf_smp=song_.samples[ii];
+      pmf_smp.length=uint16(length);
+      pmf_smp.loop_start=has_loop?uint16(loop_begin):0;
+      pmf_smp.loop_len=has_loop?uint16(loop_end-loop_begin):0;
+      pmf_smp.finetune=int16(round(log2(c2spd/8363.0f)*12*128));
+      pmf_smp.volume=volume<64?volume<<2:0xff;
+      pmf_smp.data=PFC_MEM_ALLOC(pmf_smp.length);
       in_file_.seek(data_offset);
-      in_file_.read_bytes(inst.data.data, inst.length);
+      in_file_.read_bytes(pmf_smp.data.data, pmf_smp.length);
       if(ffi==2)
       {
         // convert sample from 8-bit unsigned to 8-bit signed
-        uint8 *d=(uint8*)inst.data.data;
-        for(unsigned i=0; i<inst.length; ++i)
+        uint8 *d=(uint8*)pmf_smp.data.data;
+        for(unsigned i=0; i<pmf_smp.length; ++i)
           d[i]-=0x80;
       }
     }
@@ -149,7 +183,7 @@ bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
     in_file_.seek(file_offset+2);
     pmf_pattern &pat=song_.patterns[i];
     pat.rows.resize(64*32);
-    unsigned start_pattern_data_pos=in_file_.pos();
+    usize_t start_pattern_data_pos=in_file_.pos();
     unsigned row=0;
     while(row<64)
     {
@@ -163,17 +197,17 @@ bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
           break;
 
         // unpack data
-        pmf_pattern_track_row &track_row=pat.rows[row*32+(desc&31)];
+        uint8 channel_idx=(desc&31);
+        pmf_pattern_track_row &track_row=pat.rows[row*32+channel_idx];
         if(desc&32)
         {
           uint8 note, instrument;
           in_file_>>note>>instrument;
-          uint8 note_idx=(1+(note>>4))*12+(note&0xf);
-          if(note!=255)
-          {
-            PFC_ASSERT(note==254 || note_idx<120);
+          uint8 note_oct=note>>4;
+          uint8 note_key=note&0xf;
+          uint8 note_idx=(1+note_oct)*12+note_key;
+          if(note!=255 && (note==254 || (note_oct<10 && note_key<12)))
             track_row.note=note!=254?note_idx:pmfcfg_note_cut;
-          }
           track_row.instrument=instrument?instrument-1:0xff;
         }
         if(desc&64)
@@ -192,10 +226,10 @@ bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
             // A: set speed
             case 'A'+fx_offset:
             {
-              if(command_info && command_info<=32)
+              if(command_info)
               {
                 track_row.effect=pmffx_set_speed_tempo;
-                track_row.effect_data=command_info;
+                track_row.effect_data=command_info<32?command_info:31;
               }
             } break;
 
@@ -212,43 +246,34 @@ bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
             // C: pattern break
             case 'C'+fx_offset:
             {
-              uint8 row=(command_info>>4)*10+(command_info&0xf);
-              if(row<64)
+              uint8 target_row=(command_info>>4)*10+(command_info&0xf);
+              if(target_row<64)
               {
                 track_row.effect=pmffx_pattern_break;
-                track_row.effect_data=row;
+                track_row.effect_data=target_row;
               }
             } break;
 
             // D: volume slide
             case 'D'+fx_offset:
             {
-              if((command_info&0xf0)==0xf0)
+              if((command_info&0xf0)!=0xf0 && (command_info&0x0f)!=0x0f)
               {
-                if(command_info&0x0f)
-                {
-                  // fine-slide down
-                  track_row.effect=pmffx_volume_slide;
-                  track_row.effect_data=(command_info&0x0f)|pmffx_vslidetype_fine_down;
-                }
+                // normal volume slide
+                track_row.effect=pmffx_volume_slide;
+                track_row.effect_data=command_info&0x0f?((command_info&0x0f)|pmffx_vslidetype_down):(command_info>>4)|pmffx_vslidetype_up;
+              }
+              else if((command_info&0xf0)==0xf0)
+              {
+                // fine-slide down
+                track_row.effect=pmffx_volume_slide;
+                track_row.effect_data=(command_info&0x0f)|pmffx_vslidetype_fine_down;
               }
               else if((command_info&0x0f)==0x0f)
               {
-                if(command_info&0xf0)
-                {
-                  // fine-slide up
-                  track_row.effect=pmffx_volume_slide;
-                  track_row.effect_data=(command_info&0x0f)|pmffx_vslidetype_fine_up;
-                }
-              }
-              else
-              {
-                if(!(command_info&0xf0) || !(command_info&0x0f))
-                {
-                  // normal volume slide
-                  track_row.effect=pmffx_volume_slide;
-                  track_row.effect_data=command_info&0xf0?(command_info>>4)|pmffx_vslidetype_up:((command_info&0x0f)|pmffx_vslidetype_down);
-                }
+                // fine-slide up
+                track_row.effect=pmffx_volume_slide;
+                track_row.effect_data=(command_info>>4)|pmffx_vslidetype_fine_up;
               }
             } break;
 
@@ -284,6 +309,12 @@ bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
             {
               track_row.effect=pmffx_vibrato;
               track_row.effect_data=command_info;
+            } break;
+
+            // I: tremor
+            case 'I'+fx_offset:
+            {
+              /*todo*/
             } break;
 
             // J: arpeggio
@@ -331,11 +362,25 @@ bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
               }
             } break;
 
+            // R: tremolo
+            case 'R'+fx_offset:
+            {
+              track_row.effect=pmffx_tremolo;
+              track_row.effect_data=command_info;
+            } break;
+
             // S: sub-effect
             case 'S'+fx_offset:
             {
               switch(command_info>>4)
               {
+                // glissando control
+                case 0x1:
+                {
+                  track_row.effect=pmffx_subfx;
+                  track_row.effect_data=(pmfsubfx_set_glissando<<num_subfx_value_bits)|(command_info&0xf?1:0);
+                } break;
+
                 // set finetune
                 case 0x2:
                 {
@@ -353,11 +398,47 @@ bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
                   }
                 } break;
 
+                // set tremolo waveform
+                case 0x4:
+                {
+                  if((command_info&0xf)<8)
+                  {
+                    track_row.effect=pmffx_subfx;
+                    track_row.effect_data=(pmfsubfx_set_tremolo_wave<<num_subfx_value_bits)|(command_info&0xf);
+                  }
+                } break;
+
+                // set panning position
+                case 0x8:
+                {
+                  /*todo*/
+                } break;
+
+                // old stereo control
+                case 0xa:
+                {
+                  /*todo*/
+                } break;
+
                 // loop pattern
                 case 0xb:
                 {
                   track_row.effect=pmffx_subfx;
-                  track_row.effect_data=(pmfsubfx_loop_pattern<<num_subfx_value_bits)|(command_info&0xf);
+                  track_row.effect_data=(pmfsubfx_pattern_loop<<num_subfx_value_bits)|(command_info&0xf);
+                } break;
+
+                // note cut after X ticks
+                case 0xc:
+                {
+                  track_row.effect=pmffx_subfx;
+                  track_row.effect_data=(pmfsubfx_note_cut<<num_subfx_value_bits)|(command_info&0xf);
+                } break;
+
+                // note delay for X ticks
+                case 0xd:
+                {
+                  track_row.effect=pmffx_subfx;
+                  track_row.effect_data=(pmfsubfx_note_delay<<num_subfx_value_bits)|(command_info&0xf);
                 } break;
 
                 // pattern delay
@@ -369,26 +450,48 @@ bool convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
                     track_row.effect_data=(pmfsubfx_pattern_delay<<num_subfx_value_bits)|(command_info&0xf);
                   }
                 } break;
+
+                // funk repeat
+                case 0xf:
+                {
+                  /*todo*/
+                } break;
               }
             } break;
 
             // T: set tempo
             case 'T'+fx_offset:
             {
-              if(command_info>32)
+              if(command_info>=32)
               {
                 track_row.effect=pmffx_set_speed_tempo;
                 track_row.effect_data=command_info;
               }
             } break;
+
+            // U: fine vibrato
+            case 'U'+fx_offset:
+            {
+              /*todo*/
+            } break;
+
+            // V: set global volume
+            case 'V'+fx_offset:
+            {
+              /*todo*/
+            } break;
           }
         }
+
+        // check for valid channel (ignore Adlib channels)
+        if(chl_settings[channel_idx]>=16)
+          track_row.clear();
       }
       ++row;
     }
     song_.total_pattern_data_bytes+=in_file_.pos()-start_pattern_data_pos;
   }
 
-  return true;
+  return pmferr_ok;
 }
 //----------------------------------------------------------------------------

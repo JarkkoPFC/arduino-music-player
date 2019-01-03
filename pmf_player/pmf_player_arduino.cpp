@@ -1,7 +1,7 @@
 //============================================================================
-// PMF Player v0.3
+// PMF Player v0.4
 //
-// Copyright (c) 2013, Profoundic Technologies, Inc.
+// Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
 //----------------------------------------------------------------------------
 // Redistribution and use in source and binary forms, with or without
@@ -146,8 +146,8 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
 
     // get channel attributes
     size_t sample_addr=(size_t)(m_pmf_file+pgm_read_word(channel->inst_metadata+pmfcfg_offset_inst_offset));
-    uint16_t sample_len=pgm_read_word(channel->inst_metadata+pmfcfg_offset_inst_length);
-    uint16_t loop_len=pgm_read_word(channel->inst_metadata+pmfcfg_offset_inst_loop_length);
+    uint16_t sample_len=pgm_read_word(channel->inst_metadata+pmfcfg_offset_inst_length);/*todo: should be dword*/
+    uint16_t loop_len=pgm_read_word(channel->inst_metadata+pmfcfg_offset_inst_loop_length);/*todo: should be dword*/
     uint8_t volume=(uint16_t(channel->sample_volume)*channel->vol_env_value)>>8;
     register uint8_t sample_pos_frc=channel->sample_pos;
     register uint16_t sample_pos_int=sample_addr+(channel->sample_pos>>8);

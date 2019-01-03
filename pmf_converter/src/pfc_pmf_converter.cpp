@@ -1,7 +1,7 @@
 //============================================================================
-// Spin-X Platform (http://www.spinxplatform.com)
+// Spin-X Platform
 //
-// Copyright (c) 2013, Profoundic Technologies, Inc.
+// Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
 //----------------------------------------------------------------------------
 // Redistribution and use in source and binary forms, with or without
@@ -44,6 +44,8 @@ using namespace pfc;
 enum {pmfcfg_offset_flags=PFC_OFFSETOF(pmf_header, flags)};
 enum {pmfcfg_offset_init_speed=PFC_OFFSETOF(pmf_header, initial_speed)};
 enum {pmfcfg_offset_init_tempo=PFC_OFFSETOF(pmf_header, initial_tempo)};
+enum {pmfcfg_offset_note_period_min=PFC_OFFSETOF(pmf_header, note_period_min)};
+enum {pmfcfg_offset_note_period_max=PFC_OFFSETOF(pmf_header, note_period_max)};
 enum {pmfcfg_offset_playlist_length=PFC_OFFSETOF(pmf_header, playlist_length)};
 enum {pmfcfg_offset_num_channels=PFC_OFFSETOF(pmf_header, num_channels)};
 enum {pmfcfg_offset_num_patterns=PFC_OFFSETOF(pmf_header, num_patterns)};
@@ -56,12 +58,13 @@ enum {pmfcfg_offset_pattern_metadata_track_offsets=2};
 // PMF instrument config
 enum {pmfcfg_instrument_metadata_size=sizeof(pmf_instrument_header)};
 enum {pmfcfg_offset_inst_offset=PFC_OFFSETOF(pmf_instrument_header, data_offset)};
-enum {pmfcfg_offset_inst_volume=PFC_OFFSETOF(pmf_instrument_header, default_volume)};
 enum {pmfcfg_offset_inst_length=PFC_OFFSETOF(pmf_instrument_header, length)};
 enum {pmfcfg_offset_inst_loop_length=PFC_OFFSETOF(pmf_instrument_header, loop_length)};
-enum {pmfcfg_offset_inst_c4hz=PFC_OFFSETOF(pmf_instrument_header, c4hz)};
 enum {pmfcfg_offset_inst_vol_env=PFC_OFFSETOF(pmf_instrument_header, vol_env_offset)};
 enum {pmfcfg_offset_inst_fadeout_speed=PFC_OFFSETOF(pmf_instrument_header, fadeout_speed)};
+enum {pmfcfg_offset_inst_finetune=PFC_OFFSETOF(pmf_instrument_header, finetune)};
+enum {pmfcfg_offset_inst_flags=PFC_OFFSETOF(pmf_instrument_header, flags)};
+enum {pmfcfg_offset_inst_volume=PFC_OFFSETOF(pmf_instrument_header, default_volume)};
 // envelope configs
 enum {pmfcfg_offset_env_num_points=0};
 enum {pmfcfg_offset_env_sustain_loop_start=1};
@@ -73,10 +76,12 @@ enum {pmfcfg_envelope_point_size=2};
 // bit-compression settings
 enum {pmfcfg_num_data_mask_bits=4};
 enum {pmfcfg_num_note_bits=7};       // max 10 octaves (0-9) (12*10=120)
-enum {pmfcfg_num_instrument_bits=5}; // max 32 instruments
+enum {pmfcfg_num_instrument_bits=6}; // max 64 instruments
 enum {pmfcfg_num_volume_bits=6};     // volume range [0, 63]
 enum {pmfcfg_num_effect_bits=4};     // effects 0-15
 enum {pmfcfg_num_effect_data_bits=8};
+//----
+enum {pmfcfg_max_instruments=1<<pmfcfg_num_instrument_bits};
 //----------------------------------------------------------------------------
 
 
@@ -84,8 +89,8 @@ enum {pmfcfg_num_effect_data_bits=8};
 // locals
 //============================================================================
 static const char *s_copyright_message=
-  "PMF Converter v0.3\r\n"
-  "Copyright (C) 2013, Profoundic Technologies, Inc. All rights reserved.\r\n"
+  "PMF Converter v0.4\r\n"
+  "Copyright (c) 2019, Profoundic Technologies, Inc. All rights reserved.\r\n"
   "\n";
 static const char *s_usage_message="Usage: pfc_mod_converter [options] -i <input.mod/s3m/xm/it> -o <output.pmf>   (-h for help)\r\n";
 //----------------------------------------------------------------------------
@@ -105,6 +110,7 @@ struct command_arguments
   //----
 
   heap_str input_file;
+  heap_str friendly_input_file;
   heap_str output_file;
   unsigned max_channels;
   bool output_binary;
@@ -121,7 +127,7 @@ bool parse_command_arguments(command_arguments &ca_, const char **args_, unsigne
     if(args_[i][0]=='-')
     {
       // switch to proper argument handling
-      unsigned arg_size=str_size(args_[i]);
+      usize_t arg_size=str_size(args_[i]);
       switch(to_lower(args_[i][1]))
       {
         // help
@@ -157,6 +163,8 @@ bool parse_command_arguments(command_arguments &ca_, const char **args_, unsigne
           if(arg_size==2 && i<num_args_-1)
           {
             ca_.input_file=args_[i+1];
+            ca_.friendly_input_file=get_filename(ca_.input_file.c_str());
+            str_lower(ca_.friendly_input_file.c_str());
             ++i;
           }
         } break;
@@ -229,12 +237,17 @@ void write_bits(array<uint8> &comp_data_, unsigned &bit_pos_, unsigned num_bits_
 //============================================================================
 pmf_pattern_track_row::pmf_pattern_track_row()
 {
+  clear();
+}
+//----
+
+void pmf_pattern_track_row::clear()
+{
   note=0xff;
   instrument=0xff;
   volume=0xff;
   effect=0xff;
   effect_data=0;
-  trailing_empty_rows=0;
 }
 //----
 
@@ -258,18 +271,15 @@ bool pmf_pattern_track_row::is_empty() const
 }
 //----
 
-unsigned pmf_pattern_track_row::num_bits() const
+bool pmf_pattern_track_row::is_global_effect() const
 {
-  unsigned num_bits=5;
-  if(note!=0xff)
-    num_bits+=pmfcfg_num_note_bits;
-  if(instrument!=0xff)
-    num_bits+=pmfcfg_num_instrument_bits;
-  if(volume!=0xff)
-    num_bits+=pmfcfg_num_volume_bits;
-  if(effect!=0xff)
-    num_bits+=pmfcfg_num_effect_bits+pmfcfg_num_effect_data_bits;
-  return num_bits;
+  // check for global effect
+  uint8 sub_effect=effect_data>>4;
+  return    effect==pmffx_set_speed_tempo
+         || effect==pmffx_position_jump
+         || effect==pmffx_pattern_break
+         || (effect==pmffx_subfx && (   sub_effect==pmfsubfx_pattern_delay
+                                     || sub_effect==pmfsubfx_pattern_loop));
 }
 //----------------------------------------------------------------------------
 
@@ -291,7 +301,7 @@ struct pmf_pattern_track
   }
   //--------------------------------------------------------------------------
 
-  unsigned offset;
+  usize_t offset;
   array<uint8> compressed_data;
   array<pmf_pattern_track_row> rows;
 };
@@ -323,14 +333,14 @@ pmf_envelope::pmf_envelope()
 bool pmf_envelope::operator==(const pmf_envelope &env_) const
 {
   // check for matching envelopes
-  unsigned num_pnts=data.size();
+  usize_t num_pnts=data.size();
   if(   sustain_loop_start!=env_.sustain_loop_start
      || sustain_loop_end!=env_.sustain_loop_end
      || loop_start!=env_.loop_start
      || loop_end!=env_.loop_end
      || num_pnts!=env_.data.size())
     return false;
-  for(unsigned i=0; i<num_pnts; ++i)
+  for(usize_t i=0; i<num_pnts; ++i)
     if(data[i]!=env_.data[i])
       return false;
   return true;
@@ -343,12 +353,22 @@ bool pmf_envelope::operator==(const pmf_envelope &env_) const
 //============================================================================
 pmf_instrument::pmf_instrument()
 {
+  sample_idx=unsigned(-1);
+  fadeout_speed=65535;
+}
+//----------------------------------------------------------------------------
+
+
+//============================================================================
+// pmf_sample
+//============================================================================
+pmf_sample::pmf_sample()
+{
+  volume=0;      // [0, 255]
+  finetune=0;
   length=0;
   loop_start=0;
   loop_len=0;
-  c4hz=8363;
-  volume=0;      // [0, 255]
-  fadeout_speed=65535;
 }
 //----------------------------------------------------------------------------
 
@@ -362,8 +382,10 @@ pmf_song::pmf_song()
   flags=0;
   initial_speed=6;
   initial_tempo=125;
+  note_period_min=28;
+  note_period_max=27392;
   total_pattern_data_bytes=0;
-  total_instrument_data_bytes=0;
+  total_sample_data_bytes=0;
 }
 //----------------------------------------------------------------------------
 
@@ -384,7 +406,7 @@ struct pmf_pattern_info
   bool is_referred;
   unsigned index;
   unsigned num_rows; // [1, 256]
-  array<unsigned> tracks;
+  array<usize_t> tracks;
 };
 //----------------------------------------------------------------------------
 
@@ -397,16 +419,36 @@ struct instrument_info
   instrument_info()
   {
     is_referred=false;
-    cropped_len=0;
     index=0;
     vol_env_offset=unsigned(-1);
   }
   //--------------------------------------------------------------------------
 
   bool is_referred;
-  unsigned cropped_len;
   unsigned index;
-  unsigned vol_env_offset;
+  usize_t vol_env_offset;
+};
+//----------------------------------------------------------------------------
+
+
+//============================================================================
+// sample_info
+//============================================================================
+struct sample_info
+{
+  sample_info()
+  {
+    is_referred=false;
+    index=0;
+    data_offset=0;
+    cropped_len=0;
+  }
+  //--------------------------------------------------------------------------
+
+  bool is_referred;
+  unsigned index;
+  usize_t data_offset;
+  usize_t cropped_len;
 };
 //----------------------------------------------------------------------------
 
@@ -417,7 +459,7 @@ struct instrument_info
 struct comp_type
 {
   uint8 type;
-  unsigned size;
+  usize_t size;
 };
 //----
 
@@ -435,10 +477,10 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
 {
   // get song info
   const unsigned num_channels=song_.num_channels;
-  const unsigned num_patterns=song_.patterns.size();
-  const unsigned num_instruments=song_.instruments.size();
-  const unsigned playlist_length=song_.playlist.size();
-  logf("Playlist length: %i\r\n", playlist_length);
+  const usize_t num_patterns=song_.patterns.size();
+  const usize_t num_instruments=song_.instruments.size();
+  const usize_t num_samples=song_.samples.size();
+  const usize_t playlist_length=song_.playlist.size();
 
   // check for patterns referred by the playlist
   unsigned num_active_patterns=0;
@@ -446,7 +488,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   for(unsigned i=0; i<num_patterns; ++i)
   {
     pmf_pattern_info &pinfo=pat_infos[i];
-    pinfo.tracks.resize(song_.num_channels);
+    pinfo.tracks.resize(num_channels);
   }
   for(unsigned i=0; i<playlist_length; ++i)
   {
@@ -462,11 +504,11 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
     if(pinfo.is_referred)
       pinfo.index=num_active_patterns++;
   }
-  logf("Number of active patterns: %i\r\n", num_active_patterns);
 
   // check for instruments referred by active patterns & mark active channels
   array<uint8> active_channels(num_channels, uint8(0));
   array<instrument_info> inst_infos(num_instruments);
+  array<sample_info> smp_infos(num_samples);
   for(unsigned pi=0; pi<num_patterns; ++pi)
   {
     pmf_pattern_info &pinfo=pat_infos[pi];
@@ -487,6 +529,8 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
           active_channels[ci]|=2;
           inst_infos[inst].is_referred=true;
         }
+        if(row_data->is_global_effect())
+          active_channels[ci]|=4;
         ++row_data;
       }
   }
@@ -495,27 +539,29 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   array<uint8> active_channel_map;
   for(uint8 i=0; i<num_channels; ++i)
   {
-    if(active_channels[i]==3 && active_channel_map.size()<ca_.max_channels)
+    if(active_channels[i] && active_channel_map.size()<ca_.max_channels)
       active_channel_map.push_back(i);
   }
-  const unsigned num_active_channels=active_channel_map.size();
-  logf("Number of active channels: %i\r\n", num_active_channels);
+  const usize_t num_active_channels=active_channel_map.size();
 
   // set instrument cropped length, re-index the instruments and setup envelopes
   array<pmf_envelope> envelopes;
-  array<unsigned> env_offsets;
-  unsigned total_envelope_data_size=0;
+  array<usize_t> env_offsets;
+  usize_t total_envelope_data_size=0;
   unsigned num_active_instruments=0;
   for(unsigned ii=0; ii<num_instruments; ++ii)
   {
     const pmf_instrument &inst=song_.instruments[ii];
     instrument_info &iinfo=inst_infos[ii];
-    iinfo.cropped_len=inst.loop_len?min<unsigned>(inst.length, inst.loop_start+inst.loop_len):inst.length;
     if(iinfo.is_referred)
     {
-      if(iinfo.cropped_len)
+      const pmf_sample *smp=inst.sample_idx<song_.samples.size()?&song_.samples[inst.sample_idx]:0;
+      if(smp && smp->length)
       {
         // set instrument index and check for envelope
+        sample_info &sinfo=smp_infos[inst.sample_idx];
+        sinfo.is_referred=true;
+        sinfo.cropped_len=smp->loop_len?min<unsigned>(smp->length, smp->loop_start+smp->loop_len):smp->length;
         iinfo.index=num_active_instruments++;
         if(inst.vol_envelope.data.size())
         {
@@ -527,7 +573,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
             env_offsets.push_back(total_envelope_data_size);
             envelopes.push_back(inst.vol_envelope);
             env=envelopes.last();
-            total_envelope_data_size+=pmfcfg_offset_env_points+envelopes.back().data.size()*pmfcfg_envelope_point_size;
+            total_envelope_data_size+=pmfcfg_offset_env_points+env->data.size()*pmfcfg_envelope_point_size;
           }
 
           // set instrument envelope data offset
@@ -537,6 +583,20 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
       }
       else
         iinfo.is_referred=false;
+    }
+  }
+
+  // re-index samples and calculate sample data offsets
+  unsigned num_active_samples=0;
+  unsigned total_sample_data_bytes=0;
+  for(unsigned si=0; si<num_samples; ++si)
+  {
+    sample_info &sinfo=smp_infos[si];
+    if(sinfo.is_referred)
+    {
+      sinfo.index=num_active_samples++;
+      sinfo.data_offset=total_sample_data_bytes;
+      total_sample_data_bytes+=sinfo.cropped_len;
     }
   }
 
@@ -556,6 +616,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
       // build temp track
       temp_track.rows.resize(pattern.num_rows);
       unsigned chl_idx=active_channel_map[ci];
+      bool invalid_instrument_state=false;
       for(unsigned ri=0; ri<pattern.num_rows; ++ri)
       {
         // copy track row
@@ -563,10 +624,18 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
         row=pattern.rows[chl_idx+ri*num_channels];
 
         // validate track row data
-        if(row.instrument!=0xff && (row.instrument>=num_instruments || !song_.instruments[row.instrument].length))
+        if(row.instrument!=0xff)
+          invalid_instrument_state=   row.instrument>=num_instruments
+                                   || song_.instruments[row.instrument].sample_idx>=num_samples
+                                   || !smp_infos[song_.instruments[row.instrument].sample_idx].cropped_len;
+        if(invalid_instrument_state)
         {
-          row.note=pmfcfg_note_cut;
+          if(row.note!=0xff)
+            row.note=pmfcfg_note_cut;
           row.instrument=0xff;
+          row.volume=0xff;
+          if(!row.is_global_effect())
+            row.effect=0xff;
         }
       }
 
@@ -585,12 +654,11 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
       pinfo.tracks[chl_idx]=it.index();
     }
   }
-  unsigned num_tracks=tracks.size();
+  usize_t num_tracks=tracks.size();
   float track_uniqueness=100.0f*float(num_tracks)/float(num_active_patterns*num_active_channels);
-  logf("Unique pattern tracks %i/%i (%3.1f%%)\r\n", num_tracks, num_active_patterns*num_active_channels, track_uniqueness);
 
   // compress tracks
-  unsigned total_compressed_track_bytes=0;
+  usize_t total_compressed_track_bytes=0;
   for(unsigned ti=0; ti<num_tracks; ++ti)
   {
     // track stats
@@ -600,9 +668,24 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
     unsigned total_num_dmask8_packed_bits=0;
     unsigned total_num_dmasks=0;
 
-    // process track in two passes: pass 0=collect stats, pass 1=compress
+    // check for track volume effects
     pmf_pattern_track &track=tracks[ti];
-    unsigned num_rows=track.rows.size();
+    usize_t num_rows=track.rows.size();
+    bool has_volume_effect=false;
+    uint8 num_volume_bits=pmfcfg_num_volume_bits;
+    const pmf_pattern_track_row *track_row=track.rows.data();
+    for(unsigned ri=0; ri<num_rows; ++ri)
+    {
+      uint8 volume=track_row[ri].volume;
+      if(volume!=0xff && volume>=(1<<pmfcfg_num_volume_bits))
+      {
+        has_volume_effect=true;
+        num_volume_bits=8;
+        break;
+      }
+    }
+
+    // process track in two passes: pass 0=collect stats, pass 1=compress
     unsigned bit_pos=0;
     for(unsigned pass=0; pass<2; ++pass)
     {
@@ -618,10 +701,10 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
       if(pass==1)
       {
         // get compression type that results in the smallest size
-        const unsigned total_num_dmask4_packed_bits_sparse=total_num_dmask4_packed_bits-num_empty_rows*4+num_rows;
-        const unsigned total_num_dmask8_packed_bits_sparse=total_num_dmask8_packed_bits-num_empty_rows*8+num_rows;
-        const unsigned total_num_dmask4_packed_bits_dmask_ref=total_num_dmask4_packed_bits-num_rows*(4-2)+total_num_dmasks*4;
-        const unsigned total_num_dmask8_packed_bits_dmask_ref=total_num_dmask8_packed_bits-num_rows*(8-2)+total_num_dmasks*8;
+        const usize_t total_num_dmask4_packed_bits_sparse=total_num_dmask4_packed_bits-num_empty_rows*4+num_rows;
+        const usize_t total_num_dmask8_packed_bits_sparse=total_num_dmask8_packed_bits-num_empty_rows*8+num_rows;
+        const usize_t total_num_dmask4_packed_bits_dmask_ref=total_num_dmask4_packed_bits-num_rows*(4-2)+total_num_dmasks*4;
+        const usize_t total_num_dmask8_packed_bits_dmask_ref=total_num_dmask8_packed_bits-num_rows*(8-2)+total_num_dmasks*8;
         const comp_type ctypes[]={{0x0, total_num_dmask4_packed_bits},
                                   {0x1, total_num_dmask4_packed_bits_sparse},
                                   {0x2, total_num_dmask4_packed_bits_dmask_ref},
@@ -631,8 +714,12 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
         };
         compression_type=find_min(ctypes, sizeof(ctypes)/sizeof(*ctypes))->type;
 
+        // check for volume effect
+        if(has_volume_effect)
+          compression_type|=0x8;
+
         // write track compression type
-        write_bits(track.compressed_data, bit_pos, 3, compression_type);
+        write_bits(track.compressed_data, bit_pos, 4, compression_type);
       }
 
       // compress track
@@ -684,14 +771,14 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
         uint8 volume=track_row->volume;
         if(volume!=0xff)
         {
-          num_dmask4_packed_bits+=pmfcfg_num_volume_bits;
+          num_dmask4_packed_bits+=num_volume_bits;
           if(volume==volume_buf[0])
             data_mask|=0x40;
           else if(volume==volume_buf[1])
             data_mask|=0x44;
           else
           {
-            num_dmask8_packed_bits+=pmfcfg_num_volume_bits;
+            num_dmask8_packed_bits+=num_volume_bits;
             data_mask|=0x04;
             volume_buf[1]=volume_buf[0];
             volume_buf[0]=volume;
@@ -796,8 +883,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
           // write volume data
           if((data_mask&0x44)==0x04)
           {
-            PFC_ASSERT(volume<(1<<pmfcfg_num_volume_bits));
-            write_bits(track.compressed_data, bit_pos, pmfcfg_num_volume_bits, volume);
+            write_bits(track.compressed_data, bit_pos, num_volume_bits, volume);
           }
 
           // write effect data
@@ -816,9 +902,8 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
     track.offset=total_compressed_track_bytes;
     total_compressed_track_bytes+=track.compressed_data.size();
   }
-  const unsigned pattern_header_bytes=num_active_patterns*(pmfcfg_pattern_metadata_header_size+num_active_channels*pmfcfg_pattern_metadata_track_offset_size);
+  const usize_t pattern_header_bytes=num_active_patterns*(pmfcfg_pattern_metadata_header_size+num_active_channels*pmfcfg_pattern_metadata_track_offset_size);
   float pattern_data_compression=song_.total_pattern_data_bytes?100.0f*float(total_compressed_track_bytes+pattern_header_bytes)/float(song_.total_pattern_data_bytes):0.0f;
-  logf("Compressed pattern data size: %i bytes (%3.1f%% of the original %i bytes)\r\n", total_compressed_track_bytes+pattern_header_bytes, pattern_data_compression, song_.total_pattern_data_bytes);
 
   // write PMF header
   array<uint8> pmf_data;
@@ -829,6 +914,8 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   out_stream<<uint32(0);
   out_stream<<uint8(song_.initial_speed);
   out_stream<<uint8(song_.initial_tempo);
+  out_stream<<uint16(song_.note_period_min);
+  out_stream<<uint16(song_.note_period_max);
   out_stream<<uint16(playlist_length);
   out_stream<<uint8(num_active_channels);
   out_stream<<uint8(num_active_patterns);
@@ -840,32 +927,31 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
     out_stream<<uint8(0);
 
   // calculate data offsets
-  const unsigned envelope_data_base_offset=out_stream.pos()+num_active_instruments*sizeof(pmf_instrument_header)+num_active_patterns*(pmfcfg_pattern_metadata_header_size+pmfcfg_pattern_metadata_track_offset_size*num_active_channels);
-  const unsigned track_data_base_offset=envelope_data_base_offset+total_envelope_data_size;
-  const unsigned sample_data_base_offset=track_data_base_offset+total_compressed_track_bytes;
+  const usize_t envelope_data_base_offset=out_stream.pos()+num_active_instruments*sizeof(pmf_instrument_header)+pattern_header_bytes;
+  const usize_t track_data_base_offset=envelope_data_base_offset+total_envelope_data_size;
+  const usize_t sample_data_base_offset=track_data_base_offset+total_compressed_track_bytes;
 
   // write instrument metadata
-  unsigned total_instrument_data_bytes=0;
   for(unsigned ii=0; ii<num_instruments; ++ii)
   {
     const instrument_info &iinfo=inst_infos[ii];
     if(iinfo.is_referred)
     {
       const pmf_instrument &inst=song_.instruments[ii];
-      uint32 sample_file_offset=sample_data_base_offset+total_instrument_data_bytes;
-      out_stream<<sample_file_offset;
-      out_stream<<uint8(0);
-      out_stream<<uint8(inst.volume);
-      out_stream<<uint16(iinfo.cropped_len);
-      out_stream<<uint16(inst.loop_len<iinfo.cropped_len?inst.loop_len:iinfo.cropped_len);
-      out_stream<<uint16(inst.c4hz/4);
+      const pmf_sample &smp=song_.samples[inst.sample_idx];
+      const sample_info &sinfo=smp_infos[inst.sample_idx];
+      usize_t sample_file_offset=sample_data_base_offset+sinfo.data_offset;
+      out_stream<<uint32(sample_file_offset);
+      out_stream<<uint32(sinfo.cropped_len);
+      out_stream<<uint32(smp.loop_len<sinfo.cropped_len?smp.loop_len:sinfo.cropped_len);
       out_stream<<uint16(iinfo.vol_env_offset!=unsigned(-1)?envelope_data_base_offset+iinfo.vol_env_offset:0);
       out_stream<<uint16(inst.fadeout_speed);
-      total_instrument_data_bytes+=iinfo.cropped_len;
+      out_stream<<int16(smp.finetune);
+      out_stream<<uint8(0);
+      out_stream<<uint8(smp.volume);
     }
   }
-  float instrument_data_compression=song_.total_instrument_data_bytes?100.0f*float(total_instrument_data_bytes)/float(song_.total_instrument_data_bytes):0.0f;
-  logf("Instrument sample data size: %i bytes (%3.1f%% of the original %i bytes)\r\n", total_instrument_data_bytes, instrument_data_compression, song_.total_instrument_data_bytes);
+  float instrument_data_compression=song_.total_sample_data_bytes?100.0f*float(total_sample_data_bytes)/float(song_.total_sample_data_bytes):0.0f;
 
   // write pattern metadata
   for(unsigned pi=0; pi<num_patterns; ++pi)
@@ -876,12 +962,15 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
       out_stream<<uint8(pinfo.num_rows-1);
       out_stream<<uint8(0);
       for(unsigned ci=0; ci<num_active_channels; ++ci)
-        out_stream<<uint16(track_data_base_offset+tracks[pinfo.tracks[ci]].offset);
+      {
+        unsigned chl_idx=active_channel_map[ci];
+        out_stream<<uint16(track_data_base_offset+tracks[pinfo.tracks[chl_idx]].offset);
+      }
     }
   }
 
   // write envelope data
-  unsigned num_envelopes=envelopes.size();
+  usize_t num_envelopes=envelopes.size();
   for(unsigned ei=0; ei<num_envelopes; ++ei)
   {
     const pmf_envelope &env=envelopes[ei];
@@ -901,30 +990,46 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   }
 
   // write instrument sample data
-  for(unsigned i=0; i<num_instruments; ++i)
+  for(unsigned si=0; si<num_samples; ++si)
   {
-    const instrument_info &iinfo=inst_infos[i];
-    if(iinfo.is_referred)
-      out_stream.write_bytes(song_.instruments[i].data.data, inst_infos[i].cropped_len);
+    const sample_info &sinfo=smp_infos[si];
+    if(sinfo.is_referred)
+      out_stream.write_bytes(song_.samples[si].data.data, smp_infos[si].cropped_len);
   }
 
-  // write data as binary or hex codes
+  // log PMF info
   out_stream.flush();
-  unsigned total_file_size=out_stream.pos();
+  usize_t total_file_size=out_stream.pos();
+  logf("Song name: %s%s(%s)\r\n", song_.name.c_str(), song_.name.size()?" ":"", ca_.friendly_input_file.c_str());
+  logf("Playlist length: %i\r\n", playlist_length);
+  logf("Number of active channels: %i\r\n", num_active_channels);
+  logf("Number of active patterns: %i\r\n", num_active_patterns);
+  logf("Number of instruments: %i (%i samples)\r\n", song_.instruments.size(), song_.samples.size());
+  logf("Unique pattern tracks %i/%i (%3.1f%%)\r\n", num_tracks, num_active_patterns*num_active_channels, track_uniqueness);
+  logf("Compressed pattern data size: %i bytes (%3.1f%% of the original %i bytes)\r\n", total_compressed_track_bytes+pattern_header_bytes, pattern_data_compression, song_.total_pattern_data_bytes);
+  logf("Instrument sample data size: %i bytes (%3.1f%% of the original %i bytes)\r\n", total_sample_data_bytes, instrument_data_compression, song_.total_sample_data_bytes);
   logf("Total PMF binary size: %i bytes\r\n", total_file_size);
+
+  // write data as binary or hex codes
   memcpy(pmf_data.data()+8/*PFC_OFFSETOF(pmf_header, file_size)*/, &total_file_size, 4);
-  owner_ref<bin_output_stream_base> out_file=open_file_write(ca_.output_file.c_str());
+  owner_ref<bin_output_stream_base> out_file=afs_open_write(ca_.output_file.c_str());
   if(ca_.output_binary)
     out_file->write_bytes(pmf_data.data(), pmf_data.size());
   else
   {
+    // write song info as comments
+    text_output_stream(*out_file)<<"// Song name: "<<song_.name.c_str()<<(song_.name.size()?" (":"(")<<ca_.friendly_input_file.c_str()<<")\r\n"
+                                 <<"//    Length: "<<playlist_length<<"\r\n"
+                                 <<"//  Channels: "<<num_active_channels<<"\r\n"
+                                 <<"//      Size: "<<total_file_size<<" bytes\r\n";
+
     // write data as ascii hex codes
     stack_str32 strbuf;
-    unsigned data_left=pmf_data.size();
+    usize_t data_left=pmf_data.size();
     const uint8 *bytes=pmf_data.data();
     while(data_left)
     {
-      unsigned num_bytes=min<unsigned>(data_left, 256);
+      usize_t num_bytes=min<usize_t>(data_left, 256);
       for(unsigned i=0; i<num_bytes; ++i)
       {
         strbuf.format("0x%02x, ", bytes[i]);
@@ -942,10 +1047,10 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
 //============================================================================
 // converters
 //============================================================================
-bool convert_mod(bin_input_stream_base&, pmf_song&);
-bool convert_s3m(bin_input_stream_base&, pmf_song&);
-bool convert_xm(bin_input_stream_base&, pmf_song&);
-bool convert_it(bin_input_stream_base&, pmf_song&);
+e_pmf_error convert_mod(bin_input_stream_base&, pmf_song&);
+e_pmf_error convert_s3m(bin_input_stream_base&, pmf_song&);
+e_pmf_error convert_xm(bin_input_stream_base&, pmf_song&);
+e_pmf_error convert_it(bin_input_stream_base&, pmf_song&);
 //----------------------------------------------------------------------------
 
 
@@ -961,23 +1066,33 @@ PFC_MAIN(const char *args_[], unsigned num_args_)
   owner_ref<file_system_base> fsys=create_default_file_system(true);
 
   // convert PMF file
-  owner_ptr<bin_input_stream_base> in_file=open_file_read(ca.input_file.c_str(), 0, fopencheck_none);
+  owner_ptr<bin_input_stream_base> in_file=afs_open_read(ca.input_file.c_str(), 0, fopencheck_none);
   if(!in_file.data)
   {
     logf("Unable to open file \"%s\" for reading\n\r", ca.input_file.c_str());
     return -1;
   }
   pmf_song song;
-  if(   !convert_mod(*in_file, song)
-     && !convert_s3m(*in_file, song)
-     && !convert_xm(*in_file, song)
-     && !convert_it(*in_file, song))
+  e_pmf_error err=pmferr_unknown_format;
+  if(err==pmferr_unknown_format)
+    err=convert_mod(*in_file, song);
+  if(err==pmferr_unknown_format)
+    err=convert_s3m(*in_file, song);
+  if(err==pmferr_unknown_format)
+    err=convert_xm(*in_file, song);
+  if(err==pmferr_unknown_format)
+    err=convert_it(*in_file, song);
+
+  // check for conversion failure
+  switch(err)
   {
-    logf("Unknown input file format - the file not converted \r\n");
-    return -1;
+    case pmferr_ok: break;
+    case pmferr_unknown_format: errorf("Unknown input file format - the file not converted \r\n"); return -1;
+    case pmferr_conversion_failure: errorf("File conversion failed\r\n"); return -1;
   }
 
   // write PMF file
+  song.name.resize(str_strip_outer_whitespace(song.name.c_str(), true));
   write_pmf_file(song, ca);
   return 0;
 }

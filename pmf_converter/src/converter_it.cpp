@@ -1,7 +1,7 @@
 //============================================================================
-// Spin-X Platform (http://www.spinxplatform.com)
+// Spin-X Platform
 //
-// Copyright (c) 2013, Profoundic Technologies, Inc.
+// Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
 //----------------------------------------------------------------------------
 // Redistribution and use in source and binary forms, with or without
@@ -154,17 +154,20 @@ struct it_sample
 //============================================================================
 // convert_it
 //============================================================================
-bool convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
+e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
 {
   // check for IT file type
   uint32 id;
   in_file_>>id;
   in_file_.rewind();
   if(id!=0x4d504d49)
-    return false;
+    return pmferr_unknown_format;
 
   // read header
-  in_file_.skip(0x20);
+  in_file_.skip(4);
+  char song_name[27]={0};
+  in_file_.read_bytes(song_name, 26);
+  in_file_.skip(2);
   uint16 num_ord, num_insts, num_samples, num_patterns, cwt, cmwt, flags, special;
   in_file_>>num_ord>>num_insts>>num_samples>>num_patterns;
   in_file_>>cwt>>cmwt;
@@ -174,14 +177,21 @@ bool convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
   uint8 chl_vols[max_it_channels];
   in_file_.seek(0x80);
   in_file_.read_bytes(chl_vols, max_it_channels);
-  PFC_ASSERT_MSG(cmwt>=0x200, ("Unable to read IT files older than version 2.0"));
+  if(cmwt<0x200)
+  {
+    errorf("Error: Unable to read IT files older than version 2.0\r\n");
+    return pmferr_conversion_failure;
+  }
 
   // setup song
   unsigned num_channels=max_it_channels;
+  song_.name=song_name;
   song_.num_channels=num_channels;
   song_.flags=flags&8?pmfflag_linear_freq_table:0;
   song_.initial_speed=init_speed;
   song_.initial_tempo=init_tempo;
+  song_.note_period_min=28;
+  song_.note_period_max=27392;
   array<uint8> order_indices(num_ord);
   for(unsigned i=0; i<num_ord; ++i)
   {
@@ -267,10 +277,26 @@ bool convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
     in_file_>>smp.vib_speed>>smp.vib_depth>>smp.vib_type>>smp.vib_rate;
 
     // init sample reading
-    PFC_ASSERT_MSG(!(smp.flags&4), ("IT module loader doesn't support stereo samples"));
-    PFC_ASSERT_MSG(!(convert&2), ("IT module loader doesn't support big-endian samples"));
-    PFC_ASSERT_MSG(!(convert&4), ("IT module loader doesn't support delta encoded samples"));
-    PFC_ASSERT_MSG(!(convert&16), ("IT module loader doesn't support TX-Wave 12-bit samples"));
+    if(smp.flags&4)
+    {
+      warnf("Warning: IT module loader doesn't support stereo samples - Skipping sample #%i\r\n", si);
+      continue;
+    }
+    if(convert&2)
+    {
+      warnf("Warning: IT module loader doesn't support big-endian samples - Skipping sample #%i\r\n", si);
+      continue;
+    }
+    if(convert&4)
+    {
+      warnf("Warning: IT module loader doesn't support delta encoded samples - Skipping sample #%i\r\n", si);
+      continue;
+    }
+    if(convert&16)
+    {
+      warnf("Warning: IT module loader doesn't support TX-Wave 12-bit samples - Skipping sample #%i\r\n", si);
+      continue;
+    }
     bool is_16bit=(smp.flags&2)!=0;
     smp.data.resize(smp_length);
     int8 *smp_data=smp.data.data();
@@ -292,7 +318,7 @@ bool convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
         // read block compressed size and process the block
         uint16 block_len;
         in_file_>>block_len;
-        song_.total_instrument_data_bytes+=block_len;
+        song_.total_sample_data_bytes+=block_len;
         unsigned data_width=max_data_width;
         bit_input_stream bstream(in_file_, block_len*8);
         unsigned smp_idx=0, num_block_samples=min(max_block_samples, smp_length-block_offs);
@@ -361,13 +387,13 @@ bool convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
           in_file_>>v;
           smp_data[i]=v>>8;
         }
-        song_.total_instrument_data_bytes+=smp_length*2;
+        song_.total_sample_data_bytes+=smp_length*2;
       }
       else
       {
         // read 8-bit sample
         in_file_.read_bytes(smp_data, smp_length);
-        song_.total_instrument_data_bytes+=smp_length;
+        song_.total_sample_data_bytes+=smp_length;
       }
     }
 
@@ -455,11 +481,19 @@ bool convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
           // get volume
           if(data_mask&4)
           {
-            // read volume and ignore volume column effects (i.e. volume/pitch slides & vibrato)
+            // read volume info and map potential volume effect
             uint8 volume;
             in_file_>>volume;
             if(volume<=64)
-              channel_volumes[channel]=track_row.volume=volume<63?volume:63;
+              channel_volumes[channel]=track_row.volume=volume<64?volume:63; // set volume
+            else if(volume>=65 && volume<=104)
+              channel_volumes[channel]=track_row.volume=volume+(volume<=74?0x70-65:volume<=84?0x60-75:volume<=94?0x50-85:0x40-95); // volume slide
+            else if(volume>=105 && volume<=124)
+              channel_volumes[channel]=track_row.volume=volume+(volume<=114?0x80-105:0x90-115); // note slide down/up
+            else if(volume>=193 && volume<=202)
+              channel_volumes[channel]=track_row.volume=volume+0xa0-193; // note slide
+            else if(volume>=203 && volume<=212)
+              channel_volumes[channel]=track_row.volume=volume+0xc0-203; // vibrato
           }
           if(data_mask&64)
             track_row.volume=channel_volumes[channel];
@@ -472,17 +506,17 @@ bool convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
             in_file_>>command>>command_info;
             switch(command)
             {
-              // A: Set tempo
+              // Axx: Set speed
               case 1:
               {
-                if(command_info>32)
+                if(command_info)
                 {
                   track_row.effect=pmffx_set_speed_tempo;
-                  track_row.effect_data=command_info;
+                  track_row.effect_data=command_info<32?command_info:31;
                 }
               } break;
 
-              // B: Jump to order
+              // Bxx: Jump to order
               case 2:
               {
                 if(command_info<order_indices.size())
@@ -492,14 +526,14 @@ bool convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
                 }
               } break;
 
-              // C: Break to row
+              // Cxx: Break to row
               case 3:
               {
                 track_row.effect=pmffx_pattern_break;
                 track_row.effect_data=command_info;
               } break;
 
-              // D: Volume slide
+              // Dxx: Volume slide
               case 4:
               {
                 track_row.effect=pmffx_volume_slide;
@@ -527,20 +561,258 @@ bool convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
                   track_row.effect=0xff;
               } break;
 
-              // H: Vibrato
+              // Exx: Pitch slide down
+              case 5:
+              {
+                if(command_info!=0xe0 && command_info!=0xf0)
+                {
+                  track_row.effect=pmffx_note_slide_down;
+                  track_row.effect_data=command_info;
+                }
+              } break;
+
+              // Fxx: Pitch slide up
+              case 6:
+              {
+                if(command_info!=0xe0 && command_info!=0xf0)
+                {
+                  track_row.effect=pmffx_note_slide_up;
+                  track_row.effect_data=command_info;
+                }
+              } break;
+
+              // Gxx: Slide to note
+              case 7:
+              {
+                track_row.effect=pmffx_note_slide;
+                track_row.effect_data=command_info<0xe0?command_info:0xdf;
+              } break;
+
+              // Hxy: Vibrato
               case 8:
               {
                 track_row.effect=pmffx_vibrato;
                 track_row.effect_data=command_info;
               } break;
 
-              // J: Arpeggio
+              // Ixy: Tremor
+              case 9:
+              {
+                /*todo*/
+              } break;
+
+              // Jxy: Arpeggio
               case 10:
               {
                 track_row.effect=pmffx_arpeggio;
                 track_row.effect_data=command_info;
               } break;
+
+              // Kxx: Vibrato + volume slide
+              case 11:
+              {
+                if(command_info&0xf0 && command_info&0x0f)
+                  break;
+                track_row.effect=pmffx_vibrato_vol_slide;
+                track_row.effect_data=command_info<0x10?pmffx_vslidetype_down+command_info:(pmffx_vslidetype_up+(command_info>>4));
+              } break;
+
+              // Lxx: Slide to note + volume slide
+              case 12:
+              {
+                if(command_info&0xf0 && command_info&0x0f)
+                  break;
+                track_row.effect=pmffx_note_vol_slide;
+                track_row.effect_data=command_info<0x10?pmffx_vslidetype_down+command_info:(pmffx_vslidetype_up+(command_info>>4));
+              } break;
+
+              // Mxx: Set channel volume
+              case 13:
+              {
+                /*todo*/
+              } break;
+
+              // Nxx: Channel volume slide
+              case 14:
+              {
+                /*todo*/
+              } break;
+
+              // Oxx: Set sample offset
+              case 15:
+              {
+                track_row.effect=pmffx_set_sample_offs;
+                track_row.effect_data=command_info;
+              } break;
+
+              // Pxy: Panning slide
+              case 16:
+              {
+                /*todo*/
+              } break;
+
+              // Qxy: Retrig
+              case 17:
+              {
+                if(command_info&0x0f)
+                {
+                  track_row.effect=pmffx_retrig_vol_slide;
+                  track_row.effect_data=command_info;
+                }
+              } break;
+
+              // Rxy: Tremolo
+              case 18:
+              {
+                track_row.effect=pmffx_tremolo;
+                track_row.effect_data=command_info;
+              } break;
+
+              // Sxy: Misc effects
+              case 19:
+              {
+                switch(command_info>>4)
+                {
+                  // Glissando control
+                  case 0x1:
+                  {
+                    track_row.effect=pmffx_subfx;
+                    track_row.effect_data=(pmfsubfx_set_glissando<<num_subfx_value_bits)|(command_info&0xf?1:0);
+                  } break;
+
+                  // Set finetune
+                  case 0x2:
+                  {
+                    track_row.effect=pmffx_subfx;
+                    track_row.effect_data=(pmfsubfx_set_finetune<<num_subfx_value_bits)|(((command_info&0xf)-8)&subfx_value_mask);
+                  } break;
+
+                  // Set vibrato waveform
+                  case 0x3:
+                  {
+                    if((command_info&0xf)<8)
+                    {
+                      track_row.effect=pmffx_subfx;
+                      track_row.effect_data=(pmfsubfx_set_vibrato_wave<<num_subfx_value_bits)|(command_info&0xf);
+                    }
+                  } break;
+
+                  // Set tremolo waveform
+                  case 0x4:
+                  {
+                    if((command_info&0xf)<8)
+                    {
+                      track_row.effect=pmffx_subfx;
+                      track_row.effect_data=(pmfsubfx_set_tremolo_wave<<num_subfx_value_bits)|(command_info&0xf);
+                    }
+                  } break;
+
+                  // Set panbrello waveform
+                  case 0x5:
+                  {
+                    /*todo*/
+                  } break;
+
+                  // Fine pattern delay
+                  case 0x6:
+                  {
+                    /*todo*/
+                  } break;
+
+                  // Note cut/off/fade
+                  case 0x7:
+                  {
+                    /*todo*/
+                  } break;
+
+                  // Set panning
+                  case 0x8:
+                  {
+                    /*todo*/
+                  } break;
+
+                  // Sound control
+                  case 0x9:
+                  {
+                    /*todo*/
+                  } break;
+
+                  // High offset
+                  case 0xa:
+                  {
+                    /*todo*/
+                  } break;
+
+                  // Pattern loop
+                  case 0xb:
+                  {
+                    track_row.effect=pmffx_subfx;
+                    track_row.effect_data=(pmfsubfx_pattern_loop<<num_subfx_value_bits)|(command_info&0xf);
+                  } break;
+
+                  // Note cut
+                  case 0xc:
+                  {
+                    track_row.effect=pmffx_subfx;
+                    track_row.effect_data=(pmfsubfx_note_cut<<num_subfx_value_bits)|(command_info&0xf);
+                  } break;
+
+                  // Note delay
+                  case 0xd:
+                  {
+                    track_row.effect=pmffx_subfx;
+                    track_row.effect_data=(pmfsubfx_note_delay<<num_subfx_value_bits)|(command_info&0xf);
+                  } break;
+
+                  // Pattern delay
+                  case 0xe:
+                  {
+                    if(command_info&0xf)
+                    {
+                      track_row.effect=pmffx_subfx;
+                      track_row.effect_data=(pmfsubfx_pattern_delay<<num_subfx_value_bits)|(command_info&0xf);
+                    }
+                  } break;
+
+                  // Set active macro
+                  case 0xf:
+                  {
+                    /*todo*/
+                  } break;
+                }
+              } break;
+
+              // Txx: Set tempo
+              case 20:
+              {
+                if(command_info>=32)
+                {
+                  track_row.effect=pmffx_set_speed_tempo;
+                  track_row.effect_data=command_info;
+                }
+              } break;
+
+              // Uxy: Fine vibrato
+              case 21:
+              {
+                /*todo*/
+              } break;
+
+              // Vxx: Set global volume
+              case 22:
+              {
+              } break;
+
+              // Wxy: Global volume slide
+              case 23:
+              {
+                /*todo*/
+              } break;
             }
+
+            // save latest effect & data
+            channel_effects[channel]=track_row.effect;
+            channel_effect_datas[channel]=track_row.effect_data;
           }
           if(data_mask&128)
           {
@@ -562,34 +834,99 @@ bool convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
   }
 
   // add PMF instruments
-  song_.instruments.resize(num_insts);
-  for(unsigned ii=0; ii<num_insts; ++ii)
+  song_.samples.resize(num_samples);
+  if(flags&0x4)
   {
-    // get first sample in the instrument mapping table
-    const it_instrument &inst=instruments[ii];
-    it_sample *smp=0;
-    for(unsigned i=0; i<120; ++i)
+    song_.instruments.resize(num_insts);
+    for(unsigned ii=0; ii<num_insts; ++ii)
     {
-      if(inst.note_sample_map[i].sample)
+      // try pick C-5 sample (multi-sample instruments not supported)
+      const it_instrument &inst=instruments[ii];
+      it_sample *smp=0;
       {
-        smp=&samples[inst.note_sample_map[i].sample-1];
-        break;
+        enum {c5note_idx=5*12};
+        uint8 sample_idx=inst.note_sample_map[c5note_idx].sample;
+        if(sample_idx && sample_idx-1<num_samples)
+          smp=&samples[inst.note_sample_map[c5note_idx].sample-1];
+      }
+
+      if(!smp)
+      {
+        // find the first sample in the note sample mapping table
+        for(unsigned i=0; i<120; ++i)
+        {
+          uint8 sample_idx=inst.note_sample_map[i].sample;
+          if(sample_idx && sample_idx-1<num_samples)
+          {
+            smp=&samples[sample_idx-1];
+            break;
+          }
+        }
+      }
+
+      // setup new sample if found
+      pmf_instrument &pmf_inst=song_.instruments[ii];
+      pmf_inst.fadeout_speed=inst.fadeout;
+      if(smp && smp->data.size())
+      {
+        unsigned sample_idx=unsigned(smp-samples.begin());
+        pmf_inst.sample_idx=sample_idx;
+        pmf_sample &pmf_smp=song_.samples[sample_idx];
+        pmf_smp.length=(unsigned)smp->data.size();
+        pmf_smp.loop_len=smp->flags&16?smp->loop_end-smp->loop_begin:0;
+        pmf_smp.loop_start=smp->loop_begin;
+        pmf_smp.finetune=int16(round(log2(smp->c5speed/8363.0f)*12*128));
+        pmf_smp.volume=smp->default_vol<64?smp->default_vol<<2:255;
+        pmf_smp.data=smp->data.steal_data().steal_data();
+      }
+
+      // set instrument volume envelope
+      const envelope &vol_env=inst.envelopes[0];
+      if(vol_env.flags&0x1)
+      {
+        if(vol_env.flags&2)
+        {
+          pmf_inst.vol_envelope.loop_start=vol_env.loop_begin;
+          pmf_inst.vol_envelope.loop_end=vol_env.loop_end;
+        }
+        if(vol_env.flags&0x4)
+        {
+          pmf_inst.vol_envelope.sustain_loop_start=vol_env.sustain_loop_begin;
+          pmf_inst.vol_envelope.sustain_loop_end=vol_env.sustain_loop_end;
+        }
+        pmf_inst.vol_envelope.data.resize(vol_env.num_nodes);
+        for(unsigned i=0; i<vol_env.num_nodes; ++i)
+        {
+          pmf_inst.vol_envelope.data[i].first=uint8(vol_env.node_points[i].x);
+          uint16 vol=vol_env.node_points[i].y;
+          pmf_inst.vol_envelope.data[i].second=uint8(vol<64?vol<<2:255);
+        }
       }
     }
-
-    if(smp)
+  }
+  else
+  {
+    // use samples directly as instruments
+    song_.instruments.resize(num_samples);
+    for(unsigned si=0; si<num_samples; ++si)
     {
-      // setup PMF instrument
-      pmf_instrument &pmf_inst=song_.instruments[ii];
-      pmf_inst.length=smp->data.size();
-      pmf_inst.loop_len=smp->flags&16?smp->loop_end-smp->loop_begin:0;
-      pmf_inst.loop_start=smp->loop_begin;
-      pmf_inst.c4hz=smp->c5speed;
-      pmf_inst.volume=smp->default_vol<64?smp->default_vol<<2:255;
-      pmf_inst.data=smp->data.steal_data().steal_data();
+      it_sample *smp=&samples[si];
+      if(smp->data.size())
+      {
+        // setup PMF instrument
+        pmf_instrument &pmf_inst=song_.instruments[si];
+        pmf_inst.sample_idx=si;
+        pmf_sample &pmf_smp=song_.samples[si];
+        pmf_smp.length=(unsigned)smp->data.size();
+        pmf_smp.loop_len=smp->flags&16?smp->loop_end-smp->loop_begin:0;
+        pmf_smp.loop_start=smp->loop_begin;
+        pmf_smp.finetune=int16(round(log2(smp->c5speed/8363.0f)*12*128));
+        pmf_smp.volume=smp->default_vol<64?(smp->default_vol<<2)|(smp->default_vol>>2):255;
+        pmf_smp.data=smp->data.steal_data().steal_data();
+      }
     }
   }
 
-  return true;
+  return pmferr_ok;
 }
 //----------------------------------------------------------------------------

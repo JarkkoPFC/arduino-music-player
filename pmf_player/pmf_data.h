@@ -1,7 +1,7 @@
 //============================================================================
-// PMF Player v0.3
+// PMF Player v0.4
 //
-// Copyright (c) 2013, Profoundic Technologies, Inc.
+// Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
 //----------------------------------------------------------------------------
 // Redistribution and use in source and binary forms, with or without
@@ -50,24 +50,25 @@ struct pmf_instrument_header;
 struct pmf_instrument_header
 {
   uint32_t data_offset;
-  uint8_t flags; // e_pmf_inst_flag
-  uint8_t default_volume;
-  uint16_t length;
-  uint16_t loop_length;
-  uint16_t c4hz;
+  uint32_t length;
+  uint32_t loop_length;
   uint16_t vol_env_offset;
   uint16_t fadeout_speed;
+  int16_t finetune;
+  uint8_t flags; // e_pmf_inst_flag
+  uint8_t default_volume;
 };
 //----------------------------------------------------------------------------
 
 enum {pmfcfg_instrument_metadata_size=sizeof(pmf_instrument_header)};
 enum {pmfcfg_offset_inst_offset=PFC_OFFSETOF(pmf_instrument_header, data_offset)};
-enum {pmfcfg_offset_inst_volume=PFC_OFFSETOF(pmf_instrument_header, default_volume)};
 enum {pmfcfg_offset_inst_length=PFC_OFFSETOF(pmf_instrument_header, length)};
 enum {pmfcfg_offset_inst_loop_length=PFC_OFFSETOF(pmf_instrument_header, loop_length)};
-enum {pmfcfg_offset_inst_c4hz=PFC_OFFSETOF(pmf_instrument_header, c4hz)};
 enum {pmfcfg_offset_inst_vol_env=PFC_OFFSETOF(pmf_instrument_header, vol_env_offset)};
 enum {pmfcfg_offset_inst_fadeout_speed=PFC_OFFSETOF(pmf_instrument_header, fadeout_speed)};
+enum {pmfcfg_offset_inst_finetune=PFC_OFFSETOF(pmf_instrument_header, finetune)};
+enum {pmfcfg_offset_inst_flags=PFC_OFFSETOF(pmf_instrument_header, flags)};
+enum {pmfcfg_offset_inst_volume=PFC_OFFSETOF(pmf_instrument_header, default_volume)};
 //----------------------------------------------------------------------------
 
 //============================================================================
