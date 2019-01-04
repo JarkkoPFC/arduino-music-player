@@ -10,7 +10,7 @@ The player comes with an existing music file (**aryx.s3m** by Karsten Koch) that
 [![Arduino Uno Playing 12Chl S3M @ 37KHz](https://img.youtube.com/vi/b_QbBE_fXZs/0.jpg)](https://youtu.be/b_QbBE_fXZs)
 
 ## Custom Music Files
-Good place to look for music is [The Mod Archive](https://modarchive.org), and particularly the chiptune section as they are more likely to fit into the MCU flash memory. Arduino MCU's with larger flash memory can of course fit in larger music files, e.g. Teensy 3.6 has 1MB of flash which is enough for most mod music files. To play the music files on Windows PC, you can use [OpenMPT](https://openmpt.org).
+Good place to look for music is [The Mod Archive](https://modarchive.org), and particularly the [chiptune section](https://modarchive.org/index.php?query=54&request=search&search_type=genre) as they are more likely to fit into the MCU flash memory. Arduino MCU's with larger flash memory can of course fit in larger music files, e.g. Teensy 3.6 has 1MB of flash which is enough for most mod music files. To play the music files on Windows PC, you can use [OpenMPT](https://openmpt.org).
 
 In order to use custom music files you'll need to use PMF Converter that's a Windows command line executable in **pmf_converter/bin/pmf_converter.exe**. This converter will convert MOD/S3M/XM/IT files to PMF files that you can embed to the player program. PMF format is specifically designed for small memory devices by compressing the music data, and for small music files in particular you can often see significant reduction in the file size compared to MOD/S3M/XM/IT files.
 
