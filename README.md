@@ -1,21 +1,34 @@
-Few people have been asking for sources of my Arduino music player so I created this Google Code project. The player is able to play MOD/S3M/XM/IT files on Arduino stored in MCU program memory. Here's an example video: https://youtu.be/XZfw7l-ZxqE
+Few people have been asking for the source code of my Arduino music player, so I created this GitHub project. The player is able to play MOD/S3M/XM/IT music files that are stored in the MCU program memory and has been developed so that it can run within very limited memory and performance constraints while still producing decent sound. I originally developed the player for Arduino Uno, which has only 2KB of RAM, 32KB of flash memory and 8-bit MCU running at 16MHz. Below is a video showing the player in action (running on Teensy 3.6)
 
-I started this project to be able to play 4 channel Amiga MOD files on Arduino Uno via 8-bit mono resistor DAC (https://youtu.be/zSQ0eHjO4sk). Later I expanded it to support S3M, XM and IT formats as well for more audio channels and ability to play more music that's available. I also added Teensy 3.0 support (https://youtu.be/zFMUmE5CdrQ) and structured the code so that it should be fairly easy to add support for other Arduino platforms & DAC types as well (maybe even non-Arduino platforms).
+[![Arduino Music Player on Teensy 3.6](https://img.youtube.com/vi/FbUc1X3T-MU/0.jpg)](https://youtu.be/FbUc1X3T-MU)
 
-Good place to look for tunes is The Mod Archive: http://modarchive.org, and particularly the chiptune section as they are more likely to fit into the MCU memory. The player doesn't support all effects/features of the formats currently, so some files may not be played correctly. For example volume track effects used by XM & IT formats are not current supported.
+## Basic Installation Instructions
+Once you have downloaded the project, open pmf_player.ino in Arduino IDE and compile the project for your target platform (if you have compilation issues, check the "Issues" section). For Teensy you can just connect DAC0 & Analog Ground (AGND) pins to an amplifier line-in or headphones to listen to the music. For other Arduino devices you'll need to build an 8-bit resistor DAC (e.g. [resistor ladder](https://en.wikipedia.org/wiki/Resistor_ladder)) connected to data pins 0-7. Or if the device has built-in [DAC](https://en.wikipedia.org/wiki/Digital-to-analog_converter), you can also copy & modify **pmf_player_teensy.cpp** for that device to support the DAC.
 
-The pattern data is compressed to better fit in the limited program memory of Uno (32kb for code & data), which complicates the code a bit but results the data to be compressed usually down to 20-40% of the original. Also the code is written to operate in very limited amount of RAM (~2kb). The sample data isn't compressed, but unused data outside sample loop range is cut off which may reduce the size a bit. The document about the file format & compression scheme is included in the project.
+The player comes with an existing music file (aryx.s3m by Karsten Koch) that should fit any Arduino device with at least 32Kb of flash memory. You can see Aryx playing below on Arduino Uno so you know what to expect from the birth cry of your player.
 
-This project actually contains sources for two projects: The player that gets compiled for Arduino and file converter for PC that converts MOD/S3M/IT/XM formats to unified PMF (Profoundic Music File) format. The converter is provided as Windows exe.
+[![Arduino Uno Playing 12Chl S3M @ 37KHz](https://img.youtube.com/vi/b_QbBE_fXZs/0.jpg)](https://youtu.be/b_QbBE_fXZs)
 
-If you find bugs or make improvements (fix bugs, add new features/platforms, etc.) don't hesitate to drop me a line! This is just a hobby project of mine so I work on it pretty irregularly, but I'm happy to get updates and share the work with other Arduino music enthusiasts.
+## Custom Music Files
+Good place to look for music is [The Mod Archive](https://modarchive.org), and particularly the chiptune section as they are more likely to fit into the MCU flash memory. Arduino MCU's with larger flash memory can of course fit in larger music files, e.g. Teensy 3.6 has 1MB of flash which is enough for most mod music files. To play the music files on Windows PC, you can use [OpenMPT](https://openmpt.org).
 
-Note that if you are getting the following error while compiling the project: "Can't find a register in class 'POINTER_REGS' while reloading 'asm'", it's because you have an old version of avr-gcc (i.e. the AVR C++ compiler) and need to upgrade it. The latest AVR toolchain which contains the latest gcc for AVR can be downloaded from Atmel website:
+In order to use custom music files you'll need to use PMF Converter that's a Windows command line executable in **pmf_converter/bin/pmf_converter.exe**. This converter will convert MOD/S3M/XM/IT files to PMF files that you can embed to the player program. PMF format is specifically designed for small memory devices by compressing the music data, and for small music files in particular you can often see significant reduction in the file size compared to MOD/S3M/XM/IT files.
 
-Windows: http://www.atmel.com/tools/ATMELAVRTOOLCHAINFORWINDOWS.aspx
+The PMF music data is stored in **music.h** file of the project, which you can create simply by running the following console command on your Windows PC:
+```
+pmf_converter -hex -o ../../pmf_player/music.h -i <mod/s3m/xm/it file>
+```
+After the PMF conversion you just need to compile the sketch again and upload the program to the MCU.
 
-Linux: http://www.atmel.com/tools/ATMELAVRTOOLCHAINFORLINUX.aspx
+## Issues
+- If you compile the project for a device with very limited RAM (like 2KB on Arduino Uno) the sketch compilation may fail because of insufficient RAM. You can easily reduce the RAM usage by reducing the number of supported audio channels (32 by default) to something like 16. The number of supported channels is defined in **pmf_player.h** file with *pmfplayer_max_channels* value. The number of channels the player needs to have at minimum depends on the music file, which is shown in "Channels" in the beginning of **music.h** (e.g. 12 for aryx.s3m). If you define less channels than is required by the music file, the player will just ignore the extra channels.
 
-Upgrading the compiler isn't as trivial as I would like and you have to do some manual file copying, but here are some instructions: http://forum.arduino.cc/index.php?PHPSESSID=0e4q4ve6fbd1um0csohadverf2&topic=37965.msg281176#msg281176. While the instructions are for WinAVR, I recall it's pretty much the same for the AVR toolchain.
+- Another potential problem is that when you try to compile the project you'll get "undefined reference" errors for functions *start_playback()*, *stop_playback()*, *mix_buffer()*, *get_mixer_buffer()* and *visualize_pattern_frame()*. This is because these functions are not defined for the device you are compiling the project for. In file **pmf_player_arduino.cpp** you can try to comment out the two lines with text "*AVR_ATmega328P*" to see if it works. The code in this file is MCU specific and may or may not work, and I have tested it only on Arduino Uno. If it doesn't work, you have to unfortunately program these mixing functions yourself, which can be a bit of a challenge. Fortunately the mixing functions in the Teensy implementation (**pmf_player_teensy.cpp** file) are mostly device agnostic C++, so you may borrow most of the code from those functions.
+
+- The music playback may not sound the same as it does with OpenMPT and there are many potentially reasons for it. One potential reason is that the effects used in the music file are not supported by the player, or are not implemented to the spec (which are very vague). There are also potential bugs in the player/converter that can cause playback issues. Also check for potential warnings upon the music file conversion.
+
+## Closing Words
+If you find bugs or make other improvements to the player don't hesitate to drop me a line! This is just a hobby project of mine so I work on it pretty irregularly, but I'm happy to get updates and share the work with other Arduino music enthusiasts.
+
 
 Cheers, Jarkko
