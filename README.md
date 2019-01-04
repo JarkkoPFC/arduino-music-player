@@ -3,9 +3,9 @@ Few people have been asking for the source code of my Arduino music player, so I
 [![Arduino Music Player on Teensy 3.6](https://img.youtube.com/vi/FbUc1X3T-MU/0.jpg)](https://youtu.be/FbUc1X3T-MU)
 
 ## Basic Installation Instructions
-Once you have downloaded the project, open pmf_player.ino in Arduino IDE and compile the project for your target platform (if you have compilation issues, check the "Issues" section). For Teensy you can just connect DAC0 & Analog Ground (AGND) pins to an amplifier line-in or headphones to listen to the music. For other Arduino devices you'll need to build an 8-bit resistor DAC (e.g. [resistor ladder](https://en.wikipedia.org/wiki/Resistor_ladder)) connected to data pins 0-7. Or if the device has built-in [DAC](https://en.wikipedia.org/wiki/Digital-to-analog_converter), you can also copy & modify **pmf_player_teensy.cpp** for that device to support the DAC.
+Once you have downloaded the project, open **pmf_player.ino** in Arduino IDE and compile the project for your target platform (if you have compilation issues, check the "Issues" section). For Teensy you can just connect DAC0 & Analog Ground (AGND) pins to an amplifier line-in or headphones to listen to the music. For other Arduino devices you'll need to build an 8-bit resistor DAC (e.g. [resistor ladder](https://en.wikipedia.org/wiki/Resistor_ladder)) connected to data pins 0-7. Or if the device has built-in [DAC](https://en.wikipedia.org/wiki/Digital-to-analog_converter), you can also copy & modify **pmf_player_teensy.cpp** for that device to support the DAC.
 
-The player comes with an existing music file (aryx.s3m by Karsten Koch) that should fit any Arduino device with at least 32Kb of flash memory. You can see Aryx playing below on Arduino Uno so you know what to expect from the birth cry of your player.
+The player comes with an existing music file (**aryx.s3m** by Karsten Koch) that should fit any Arduino device with at least 32Kb of flash memory. You can see Aryx playing below on Arduino Uno so you know what to expect from the birth cry of your player.
 
 [![Arduino Uno Playing 12Chl S3M @ 37KHz](https://img.youtube.com/vi/b_QbBE_fXZs/0.jpg)](https://youtu.be/b_QbBE_fXZs)
 
