@@ -187,6 +187,7 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
       "rjmp done_%= \n\t"
 
       "sample_end_%=: \n\t"
+      /*todo: implement bidi loop support*/
       "sub %A[sample_pos_int], %A[sample_loop_len] \n\t"
       "sbc %B[sample_pos_int], %B[sample_loop_len] \n\t"
       "mov __tmp_reg__, %A[sample_loop_len] \n\t"

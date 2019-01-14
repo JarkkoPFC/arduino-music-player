@@ -111,7 +111,7 @@ private:
     // sample playback
     const uint8_t *inst_metadata;
     uint32_t sample_pos;           // sample position (24.8 fp)
-    uint16_t sample_speed;         // sample speed (8.8 fp)
+    int16_t sample_speed;          // sample speed (8.8 fp)
     int16_t sample_finetune;       // sample finetune (9.7 fp)
     uint8_t sample_volume;         // sample volume (0.8 fp)
     // sound effects

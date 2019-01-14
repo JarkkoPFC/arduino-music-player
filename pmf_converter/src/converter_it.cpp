@@ -187,7 +187,7 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
   unsigned num_channels=max_it_channels;
   song_.name=song_name;
   song_.num_channels=num_channels;
-  song_.flags=flags&8?pmfflag_linear_freq_table:0;
+  song_.flags=flags&0x8?pmfflag_linear_freq_table:0;
   song_.initial_speed=init_speed;
   song_.initial_tempo=init_tempo;
   song_.note_period_min=28;
@@ -275,50 +275,52 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
     in_file_>>smp.sustain_loop_begin>>smp.sustain_loop_end;
     in_file_>>data_offset;
     in_file_>>smp.vib_speed>>smp.vib_depth>>smp.vib_type>>smp.vib_rate;
+    if(smp_length)
+      ++song_.num_valid_samples;
 
     // init sample reading
-    if(smp.flags&4)
+    if(smp.flags&0x4)
     {
       warnf("Warning: IT module loader doesn't support stereo samples - Skipping sample #%i\r\n", si);
       continue;
     }
-    if(convert&2)
+    if(convert&0x2)
     {
       warnf("Warning: IT module loader doesn't support big-endian samples - Skipping sample #%i\r\n", si);
       continue;
     }
-    if(convert&4)
+    if(convert&0x8)
     {
-      warnf("Warning: IT module loader doesn't support delta encoded samples - Skipping sample #%i\r\n", si);
-      continue;
+      warnf("Warning: IT module loader doesn't support PTM samples - Skipping sample #%i\r\n", si);
     }
-    if(convert&16)
+    if(convert&0x10)
     {
       warnf("Warning: IT module loader doesn't support TX-Wave 12-bit samples - Skipping sample #%i\r\n", si);
       continue;
     }
-    bool is_16bit=(smp.flags&2)!=0;
+    bool is_16bit=(smp.flags&0x2)!=0;
     smp.data.resize(smp_length);
     int8 *smp_data=smp.data.data();
     in_file_.seek(data_offset);
 
     // check for compressed sample
-    if(smp.flags&8)
+    if(smp.flags&0x8)
     {
       // initialize sample decompression
-      static const unsigned max_block_samples=is_16bit?0x4000:0x8000;
-      static const unsigned max_data_width=is_16bit?17:9;
-      static const unsigned data_size_bits=is_16bit?4:3;
-      static const unsigned smp_shift=is_16bit?8:0;
+      const unsigned max_block_samples=is_16bit?0x4000:0x8000;
+      const unsigned max_data_width=is_16bit?17:9;
+      const unsigned data_size_bits=is_16bit?4:3;
+      const unsigned smp_shift=is_16bit?8:0;
+      const bool is_delta=(convert&0x4)!=0;
 
       // decompress sample blocks
-      int16 smp=0;
+      int16 smp=0, smp2=0;
       for(unsigned block_offs=0; block_offs<smp_length; block_offs+=max_block_samples)
       {
         // read block compressed size and process the block
         uint16 block_len;
         in_file_>>block_len;
-        song_.total_sample_data_bytes+=block_len;
+        song_.total_src_sample_data_bytes+=block_len;
         unsigned data_width=max_data_width;
         bit_input_stream bstream(in_file_, block_len*8);
         unsigned smp_idx=0, num_block_samples=min(max_block_samples, smp_length-block_offs);
@@ -367,7 +369,8 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
 
           // add new sample
           smp+=int16(delta_smp);
-          smp_data[block_offs+smp_idx]=int8(smp>>smp_shift);
+          smp2+=smp;
+          smp_data[block_offs+smp_idx]=int8((is_delta?smp2:smp)>>smp_shift);
           ++smp_idx;
         }
 
@@ -387,18 +390,18 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
           in_file_>>v;
           smp_data[i]=v>>8;
         }
-        song_.total_sample_data_bytes+=smp_length*2;
+        song_.total_src_sample_data_bytes+=smp_length*2;
       }
       else
       {
         // read 8-bit sample
         in_file_.read_bytes(smp_data, smp_length);
-        song_.total_sample_data_bytes+=smp_length;
+        song_.total_src_sample_data_bytes+=smp_length;
       }
     }
 
     // convert to signed if unsigned
-    if(!(convert&1))
+    if(!(convert&0x1))
       for(unsigned i=0; i<smp_length; ++i)
         smp_data[i]-=0x80;
   }
@@ -416,7 +419,7 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
       in_file_>>packed_length>>num_rows;
       in_file_.skip(4);
       PFC_ASSERT(num_rows>=32 && num_rows<=200);
-      song_.total_pattern_data_bytes+=packed_length;
+      song_.total_src_pattern_data_bytes+=packed_length;
 
       // init pattern memories
       uint8 channel_data_masks[max_it_channels];
@@ -461,8 +464,10 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
             in_file_>>note;
             if(note<120)
               channel_notes[channel]=track_row.note=note;
-            else if(note==254 || note==255)
-              channel_notes[channel]=track_row.note=note==254?pmfcfg_note_cut:pmfcfg_note_off;
+            else if(note==254)
+              channel_notes[channel]=track_row.note=pmfcfg_note_cut;
+            else if(note==255)
+              channel_notes[channel]=track_row.note=pmfcfg_note_off;
           }
           if(data_mask&16)
             track_row.note=channel_notes[channel];
@@ -838,6 +843,7 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
   if(flags&0x4)
   {
     song_.instruments.resize(num_insts);
+    bool has_multisample_warn=false;
     for(unsigned ii=0; ii<num_insts; ++ii)
     {
       // try pick C-5 sample (multi-sample instruments not supported)
@@ -863,17 +869,40 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
           }
         }
       }
+      if(smp)
+        ++song_.num_valid_instruments;
+
+      if(!has_multisample_warn)
+      {
+        // check for multi-sample instrument
+        uint8 prev_sample_idx=0;
+        for(unsigned i=0; i<120; ++i)
+        {
+          uint8 sample_idx=inst.note_sample_map[i].sample;
+          if(sample_idx && sample_idx!=prev_sample_idx)
+          {
+            if(prev_sample_idx)
+            {
+              warnf("Warning: Multi-sample instruments not supported\r\n");
+              has_multisample_warn=true;
+              break;
+            }
+            prev_sample_idx=sample_idx;
+          }
+        }
+      }
 
       // setup new sample if found
       pmf_instrument &pmf_inst=song_.instruments[ii];
-      pmf_inst.fadeout_speed=inst.fadeout;
+      pmf_inst.fadeout_speed=inst.fadeout*64;
       if(smp && smp->data.size())
       {
         unsigned sample_idx=unsigned(smp-samples.begin());
         pmf_inst.sample_idx=sample_idx;
         pmf_sample &pmf_smp=song_.samples[sample_idx];
+        pmf_smp.flags=smp->flags&0x40?pmfinstflag_bidi_loop:0;
         pmf_smp.length=(unsigned)smp->data.size();
-        pmf_smp.loop_len=smp->flags&16?smp->loop_end-smp->loop_begin:0;
+        pmf_smp.loop_len=smp->flags&0x10?smp->loop_end-smp->loop_begin:0;
         pmf_smp.loop_start=smp->loop_begin;
         pmf_smp.finetune=int16(round(log2(smp->c5speed/8363.0f)*12*128));
         pmf_smp.volume=smp->default_vol<64?smp->default_vol<<2:255;
@@ -884,7 +913,7 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
       const envelope &vol_env=inst.envelopes[0];
       if(vol_env.flags&0x1)
       {
-        if(vol_env.flags&2)
+        if(vol_env.flags&0x2)
         {
           pmf_inst.vol_envelope.loop_start=vol_env.loop_begin;
           pmf_inst.vol_envelope.loop_end=vol_env.loop_end;
@@ -925,6 +954,7 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
         pmf_smp.data=smp->data.steal_data().steal_data();
       }
     }
+    song_.num_valid_instruments=song_.num_valid_samples;
   }
 
   return pmferr_ok;

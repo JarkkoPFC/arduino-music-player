@@ -134,7 +134,7 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
     pmf_inst.sample_idx=si;
     pmf_sample &pmf_smp=song_.samples[si];
     pmf_smp.length=len;
-    song_.total_sample_data_bytes+=len;
+    song_.total_src_sample_data_bytes+=len;
     if(len>2)
     {
       uint16 loop_start, loop_len;
@@ -146,10 +146,12 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
       if(pmf_smp.loop_len<4)
         pmf_smp.loop_len=0;
       pmf_smp.finetune=int8(finetune<<4);
+      ++song_.num_valid_samples;
     }
     else
       in_file_.skip(6);
   }
+  song_.num_valid_instruments=song_.num_valid_samples;
 
   // read pattern playlist
   uint8 playlist_len, restart_pos;
@@ -174,7 +176,7 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
   for(unsigned i=0; i<num_patterns; ++i)
   {
     // process pattern
-    song_.total_pattern_data_bytes+=pattern_size*4;
+    song_.total_src_pattern_data_bytes+=pattern_size*4;
     pmf_pattern &pattern=song_.patterns[i];
     pattern.rows.resize(pattern_size);
     in_file_.read(src_pattern_data.data(), pattern_size);
@@ -305,16 +307,13 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
             // volume slide
             case 0xa:
             {
+              track_row.effect=pmffx_volume_slide;
               if(effect_data&0xf0)
-              {
-                track_row.effect=pmffx_volume_slide;
                 track_row.effect_data=(effect_data>>4)|pmffx_vslidetype_up;
-              }
               else if(effect_data&0x0f)
-              {
-                track_row.effect=pmffx_volume_slide;
                 track_row.effect_data=effect_data|pmffx_vslidetype_down;
-              }
+              else
+                track_row.effect_data=0;
             } break;
 
             // position jump

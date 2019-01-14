@@ -52,6 +52,12 @@ enum e_pmf_flags
 {
   pmfflag_linear_freq_table  =0x01,  // 0=Amiga, 1=linear
 };
+// PMF instrument flags
+enum e_pmf_inst_flags
+{
+  pmfinstflag_16bit      = 0x01,
+  pmfinstflag_bidi_loop  = 0x02,
+};
 // PMF special notes
 enum {pmfcfg_note_cut=120};
 enum {pmfcfg_note_off=121};
@@ -120,7 +126,7 @@ struct pmf_header
 {
   char signature[4];
   uint16 version;
-  uint16 flags; // e_pmf_flag
+  uint16 flags; // e_pmf_flags
   uint32 file_size;
   uint8 initial_speed;
   uint8 initial_tempo;
@@ -234,6 +240,7 @@ struct pmf_sample
   //--------------------------------------------------------------------------
 
   uint8 volume;
+  uint8 flags; // e_pmf_inst_flags
   uint32 length;
   uint32 loop_start, loop_len;
   int16 finetune;
@@ -253,13 +260,15 @@ struct pmf_song
 
   heap_str name;
   unsigned num_channels;
-  uint16 flags; // e_pmf_flag
+  uint16 flags; // e_pmf_flags
   uint8 initial_speed;
   uint8 initial_tempo;
   uint16 note_period_min;
   uint16 note_period_max;
-  usize_t total_pattern_data_bytes;
-  usize_t total_sample_data_bytes;
+  unsigned num_valid_instruments;
+  unsigned num_valid_samples;
+  usize_t total_src_pattern_data_bytes;
+  usize_t total_src_sample_data_bytes;
   array<uint8> playlist;
   array<pmf_pattern> patterns;
   array<pmf_instrument> instruments;

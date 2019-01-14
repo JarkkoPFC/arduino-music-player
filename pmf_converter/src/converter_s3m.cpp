@@ -152,27 +152,30 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
       }
 
       // set instrument data
-      song_.total_sample_data_bytes+=length;
+      if(length)
+        ++song_.num_valid_instruments;
+      song_.total_src_sample_data_bytes+=length;
       pmf_instrument &pmf_inst=song_.instruments[ii];
       pmf_inst.sample_idx=ii;
       pmf_sample &pmf_smp=song_.samples[ii];
-      pmf_smp.length=uint16(length);
+      pmf_smp.length=length;
       pmf_smp.loop_start=has_loop?uint16(loop_begin):0;
       pmf_smp.loop_len=has_loop?uint16(loop_end-loop_begin):0;
       pmf_smp.finetune=int16(round(log2(c2spd/8363.0f)*12*128));
       pmf_smp.volume=volume<64?volume<<2:0xff;
-      pmf_smp.data=PFC_MEM_ALLOC(pmf_smp.length);
+      pmf_smp.data=PFC_MEM_ALLOC(length);
       in_file_.seek(data_offset);
-      in_file_.read_bytes(pmf_smp.data.data, pmf_smp.length);
+      in_file_.read_bytes(pmf_smp.data.data, length);
       if(ffi==2)
       {
         // convert sample from 8-bit unsigned to 8-bit signed
         uint8 *d=(uint8*)pmf_smp.data.data;
-        for(unsigned i=0; i<pmf_smp.length; ++i)
+        for(unsigned i=0; i<length; ++i)
           d[i]-=0x80;
       }
     }
   }
+  song_.num_valid_samples=song_.num_valid_instruments;
 
   // read patterns
   song_.patterns.resize(num_patterns);
@@ -261,7 +264,10 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
               {
                 // normal volume slide
                 track_row.effect=pmffx_volume_slide;
-                track_row.effect_data=command_info&0x0f?((command_info&0x0f)|pmffx_vslidetype_down):(command_info>>4)|pmffx_vslidetype_up;
+                if(command_info)
+                  track_row.effect_data=command_info&0x0f?((command_info&0x0f)|pmffx_vslidetype_down):(command_info>>4)|pmffx_vslidetype_up;
+                else
+                  track_row.effect_data=0;
               }
               else if((command_info&0xf0)==0xf0)
               {
@@ -489,7 +495,7 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
       }
       ++row;
     }
-    song_.total_pattern_data_bytes+=in_file_.pos()-start_pattern_data_pos;
+    song_.total_src_pattern_data_bytes+=in_file_.pos()-start_pattern_data_pos;
   }
 
   return pmferr_ok;

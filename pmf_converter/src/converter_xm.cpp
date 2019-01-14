@@ -99,7 +99,7 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
     uint8 packing;
     uint16 num_rows, packed_size;
     in_file_>>header_len>>packing>>num_rows>>packed_size;
-    song_.total_pattern_data_bytes+=packed_size;
+    song_.total_src_pattern_data_bytes+=packed_size;
 
     // add pattern
     pmf_pattern &pattern=song_.patterns.push_back();
@@ -242,16 +242,13 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
               // volume slide
               case 10:
               {
+                track_row->effect=pmffx_volume_slide;
                 if(effect_data&0xf0)
-                {
-                  track_row->effect=pmffx_volume_slide;
                   track_row->effect_data=(effect_data>>4)|pmffx_vslidetype_up;
-                }
                 else if(effect_data&0x0f)
-                {
-                  track_row->effect=pmffx_volume_slide;
                   track_row->effect_data=effect_data|pmffx_vslidetype_down;
-                }
+                else
+                  track_row->effect_data=0;
               } break;
 
               // position jump
@@ -471,6 +468,7 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
   // read instruments
   song_.instruments.resize(num_instruments);
   song_.samples.resize(num_instruments);
+  bool has_multisample_warn=false;
   for(unsigned ii=0; ii<num_instruments; ++ii)
   {
     // read instrument header
@@ -483,6 +481,10 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
     in_file_>>num_samples;
     if(num_samples)
     {
+      // update song stats
+      ++song_.num_valid_instruments;
+      song_.num_valid_samples+=num_samples;
+
       // read common sample info
       uint32 sample_header_size;
       in_file_>>sample_header_size;
@@ -515,10 +517,15 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
         in_file_>>smp.compression;
         in_file_.skip(sample_header_size-18);
         smp.volume=smp.volume<64?(smp.volume<<2)|(smp.volume>>4):0xff;
-        song_.total_sample_data_bytes+=smp.length;
+        song_.total_src_sample_data_bytes+=smp.length;
       }
 
       // read sample data
+      if(num_samples>1 && !has_multisample_warn)
+      {
+        warnf("Warning: Multi-sample instruments not supported\r\n");
+        has_multisample_warn=true;
+      }
       for(unsigned si=0; si<num_samples; ++si)
       {
         xm_sample &smp=inst_samples[si];
@@ -559,14 +566,14 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
       pmf_instrument &pmf_inst=song_.instruments[ii];
       pmf_inst.sample_idx=ii;
       pmf_sample &pmf_smp=song_.samples[ii];
+      pmf_smp.flags=(smp.type&3)==2?pmfinstflag_bidi_loop:0;
       pmf_smp.length=smp.length;
       pmf_smp.loop_start=smp.loop_start;
       pmf_smp.loop_len=smp.type&3?smp.loop_length:0;
       pmf_smp.volume=smp.volume<64?smp.volume<<2:0xff;
       pmf_smp.data=smp.data;
       pmf_smp.finetune=smp.rel_note*128+smp.finetune;
-      song_.total_sample_data_bytes+=smp.length;
-      pmf_inst.fadeout_speed=vol_env_type&1?vol_fadeout:65535;
+      pmf_inst.fadeout_speed=vol_env_type&1?uint16(min(vol_fadeout*2, 65535)):65535;
 
       // set instrument volume envelope
       if(vol_env_type&1)

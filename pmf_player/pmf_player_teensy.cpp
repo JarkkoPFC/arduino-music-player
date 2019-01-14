@@ -98,10 +98,16 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
     // get channel attributes
     size_t sample_addr=(size_t)(m_pmf_file+pgm_read_dword(channel->inst_metadata+pmfcfg_offset_inst_offset));
     uint32_t sample_pos=channel->sample_pos;
-    uint16_t sample_speed=channel->sample_speed;
+    int16_t sample_speed=channel->sample_speed;
     uint32_t sample_end=uint32_t(pgm_read_dword(channel->inst_metadata+pmfcfg_offset_inst_length))<<8;
-    uint32_t sample_loop_len=pgm_read_dword(channel->inst_metadata+pmfcfg_offset_inst_loop_length);
+    uint32_t sample_loop_len=pgm_read_dword(channel->inst_metadata+pmfcfg_offset_inst_loop_length)<<8;
     uint8_t sample_volume=(uint16_t(channel->sample_volume)*channel->vol_env_value)>>8;
+    uint32_t sample_pos_offs=sample_end-sample_loop_len;
+    if(sample_pos<sample_pos_offs)
+      sample_pos_offs=0;
+    sample_addr+=sample_pos_offs>>8;
+    sample_pos-=sample_pos_offs;
+    sample_end-=sample_pos_offs;
 
     // mix channel to the buffer
     int16_t *buf=(int16_t*)buf_.begin, *buffer_end=buf+num_samples_;
@@ -113,7 +119,7 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
       uint8_t sample_pos_frc=sample_pos&255;
       int16_t interp_smp=((int16_t(int8_t(smp&255))*(256-sample_pos_frc))>>8)+((int16_t(int8_t(smp>>8))*sample_pos_frc)>>8);
       *buf+=int16_t(sample_volume*interp_smp)>>8;
-#else      
+#else
       int8_t smp=(int8_t)pgm_read_byte(sample_addr+(sample_pos>>8));
       *buf+=int16_t(sample_volume*int16_t(smp))>>8;
 #endif
@@ -122,15 +128,24 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
       sample_pos+=sample_speed;
       if(sample_pos>=sample_end)
       {
-        sample_pos-=long(sample_loop_len)<<8;
+        // check for loop
         if(!sample_loop_len)
         {
           channel->sample_speed=0;
           break;
         }
+
+        // apply normal/bidi loop
+        if(pgm_read_byte(channel->inst_metadata+pmfcfg_offset_inst_flags)&pmfinstflag_bidi_loop)
+        {
+          sample_pos-=sample_speed*2;
+          channel->sample_speed=sample_speed=-sample_speed;
+        }
+        else
+          sample_pos-=sample_loop_len;
       }
     } while(++buf<buffer_end);
-    channel->sample_pos=sample_pos;
+    channel->sample_pos=sample_pos+sample_pos_offs;
   } while(++channel!=channel_end);
 
   // advance buffer

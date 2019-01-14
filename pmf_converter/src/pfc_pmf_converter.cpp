@@ -37,9 +37,11 @@ using namespace pfc;
 
 
 //============================================================================
-// PMF format confing
+// PMF format config
 //============================================================================
 // PMF config
+enum {pmf_converter_version=0x0410}; // v0.41
+enum {pmf_file_version=0x1200};      // v1.2
 // PMF file structure
 enum {pmfcfg_offset_flags=PFC_OFFSETOF(pmf_header, flags)};
 enum {pmfcfg_offset_init_speed=PFC_OFFSETOF(pmf_header, initial_speed)};
@@ -88,11 +90,27 @@ enum {pmfcfg_max_instruments=1<<pmfcfg_num_instrument_bits};
 //============================================================================
 // locals
 //============================================================================
-static const char *s_copyright_message=
-  "PMF Converter v0.4\r\n"
-  "Copyright (c) 2019, Profoundic Technologies, Inc. All rights reserved.\r\n"
-  "\n";
-static const char *s_usage_message="Usage: pfc_mod_converter [options] -i <input.mod/s3m/xm/it> -o <output.pmf>   (-h for help)\r\n";
+static const char *s_converter_name="PMF Converter";
+static const char *s_copyright_message="Copyright (c) 2019, Profoundic Technologies, Inc. All rights reserved.";
+static const char *s_usage_message="Usage: pmf_converter [options] -i <input.mod/s3m/xm/it> -o <output.pmf>   (-h for help)";
+//----------------------------------------------------------------------------
+
+
+//============================================================================
+// bcd16_version_str
+//============================================================================
+stack_str8 bcd16_version_str(uint16 version_)
+{
+  stack_str8 s;
+  s.format("%i.", version_>>12);
+  version_<<=4;
+  do
+  {
+    s.push_back_format("%x", (version_>>12));
+    version_<<=4;
+  } while(version_);
+  return s;
+}
 //----------------------------------------------------------------------------
 
 
@@ -136,8 +154,10 @@ bool parse_command_arguments(command_arguments &ca_, const char **args_, unsigne
           if(arg_size==2)
           {
             // output help
-            logf("%s"
-                 "%s"
+            logf("%s v%s\r\n" // converter name & version
+                 "%s\r\n" // copyright
+                 "\r\n"
+                 "%s\r\n" // usage
                  "\r\n"
                  "Options:\r\n"
                  "  -o <file>       Output filename\r\n"
@@ -146,7 +166,10 @@ bool parse_command_arguments(command_arguments &ca_, const char **args_, unsigne
                  "  -ch <num_chl>   Maximum number of channels (Default: 64)\r\n"
                  "\r\n"
                  "  -h              Print this screen\n"
-                 "  -c              Suppress copyright message\r\n", s_copyright_message, s_usage_message);
+                 "  -c              Suppress copyright message\r\n", 
+                 s_converter_name, bcd16_version_str(pmf_converter_version).c_str(),
+                 s_copyright_message,
+                 s_usage_message);
             return false;
           }
           else if(arg_size==4)
@@ -198,7 +221,10 @@ bool parse_command_arguments(command_arguments &ca_, const char **args_, unsigne
 
   // check for help string and copyright message output
   if(!ca_.suppress_copyright)
-    log(s_copyright_message);
+  {
+    logf("%s v%s\r\n", s_converter_name, bcd16_version_str(pmf_converter_version).c_str());
+    logf("%s\r\n\r\n", s_copyright_message);
+  }
   if(!ca_.input_file.size() || !ca_.output_file.size())
   {
     log(s_usage_message);
@@ -365,10 +391,11 @@ pmf_instrument::pmf_instrument()
 pmf_sample::pmf_sample()
 {
   volume=0;      // [0, 255]
-  finetune=0;
+  flags=0;
   length=0;
   loop_start=0;
   loop_len=0;
+  finetune=0;
 }
 //----------------------------------------------------------------------------
 
@@ -384,8 +411,10 @@ pmf_song::pmf_song()
   initial_tempo=125;
   note_period_min=28;
   note_period_max=27392;
-  total_pattern_data_bytes=0;
-  total_sample_data_bytes=0;
+  num_valid_instruments=0;
+  num_valid_samples=0;
+  total_src_pattern_data_bytes=0;
+  total_src_sample_data_bytes=0;
 }
 //----------------------------------------------------------------------------
 
@@ -903,13 +932,13 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
     total_compressed_track_bytes+=track.compressed_data.size();
   }
   const usize_t pattern_header_bytes=num_active_patterns*(pmfcfg_pattern_metadata_header_size+num_active_channels*pmfcfg_pattern_metadata_track_offset_size);
-  float pattern_data_compression=song_.total_pattern_data_bytes?100.0f*float(total_compressed_track_bytes+pattern_header_bytes)/float(song_.total_pattern_data_bytes):0.0f;
+  float pattern_data_compression=song_.total_src_pattern_data_bytes?100.0f*float(total_compressed_track_bytes+pattern_header_bytes)/float(song_.total_src_pattern_data_bytes):0.0f;
 
   // write PMF header
   array<uint8> pmf_data;
   container_output_stream<array<uint8> > out_stream(pmf_data);
   out_stream<<uint32(0x78666d70);  // "pmfx"
-  out_stream<<uint16(0x1100);      // v1.1
+  out_stream<<uint16(pmf_file_version);
   out_stream<<uint16(song_.flags);
   out_stream<<uint32(0);
   out_stream<<uint8(song_.initial_speed);
@@ -932,6 +961,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   const usize_t sample_data_base_offset=track_data_base_offset+total_compressed_track_bytes;
 
   // write instrument metadata
+  unsigned num_active_inst=0;
   for(unsigned ii=0; ii<num_instruments; ++ii)
   {
     const instrument_info &iinfo=inst_infos[ii];
@@ -947,11 +977,12 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
       out_stream<<uint16(iinfo.vol_env_offset!=unsigned(-1)?envelope_data_base_offset+iinfo.vol_env_offset:0);
       out_stream<<uint16(inst.fadeout_speed);
       out_stream<<int16(smp.finetune);
-      out_stream<<uint8(0);
+      out_stream<<uint8(smp.flags);
       out_stream<<uint8(smp.volume);
+      ++num_active_inst;
     }
   }
-  float instrument_data_compression=song_.total_sample_data_bytes?100.0f*float(total_sample_data_bytes)/float(song_.total_sample_data_bytes):0.0f;
+  float sample_data_compression=song_.total_src_sample_data_bytes?100.0f*float(total_sample_data_bytes)/float(song_.total_src_sample_data_bytes):0.0f;
 
   // write pattern metadata
   for(unsigned pi=0; pi<num_patterns; ++pi)
@@ -1002,12 +1033,12 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   usize_t total_file_size=out_stream.pos();
   logf("Song name: %s%s(%s)\r\n", song_.name.c_str(), song_.name.size()?" ":"", ca_.friendly_input_file.c_str());
   logf("Playlist length: %i\r\n", playlist_length);
-  logf("Number of active channels: %i\r\n", num_active_channels);
-  logf("Number of active patterns: %i\r\n", num_active_patterns);
-  logf("Number of instruments: %i (%i samples)\r\n", song_.instruments.size(), song_.samples.size());
+  logf("Active channels: %i\r\n", num_active_channels);
+  logf("Active patterns: %i\r\n", num_active_patterns);
+  logf("Active inst/samp: %i/%i (orig %i/%i)\r\n", num_active_instruments, num_active_instruments, song_.num_valid_instruments, song_.num_valid_samples);
   logf("Unique pattern tracks %i/%i (%3.1f%%)\r\n", num_tracks, num_active_patterns*num_active_channels, track_uniqueness);
-  logf("Compressed pattern data size: %i bytes (%3.1f%% of the original %i bytes)\r\n", total_compressed_track_bytes+pattern_header_bytes, pattern_data_compression, song_.total_pattern_data_bytes);
-  logf("Instrument sample data size: %i bytes (%3.1f%% of the original %i bytes)\r\n", total_sample_data_bytes, instrument_data_compression, song_.total_sample_data_bytes);
+  logf("PMF pattern data size: %i bytes (%3.1f%% of orig %i bytes)\r\n", total_compressed_track_bytes+pattern_header_bytes, pattern_data_compression, song_.total_src_pattern_data_bytes);
+  logf("PMF sample data size: %i bytes (%3.1f%% of orig %i bytes)\r\n", total_sample_data_bytes, sample_data_compression, song_.total_src_sample_data_bytes);
   logf("Total PMF binary size: %i bytes\r\n", total_file_size);
 
   // write data as binary or hex codes
@@ -1021,7 +1052,8 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
     text_output_stream(*out_file)<<"// Song name: "<<song_.name.c_str()<<(song_.name.size()?" (":"(")<<ca_.friendly_input_file.c_str()<<")\r\n"
                                  <<"//    Length: "<<playlist_length<<"\r\n"
                                  <<"//  Channels: "<<num_active_channels<<"\r\n"
-                                 <<"//      Size: "<<total_file_size<<" bytes\r\n";
+                                 <<"//      Size: "<<total_file_size<<" bytes\r\n"
+                                 <<"//  Exporter: "<<s_converter_name<<" v"<<bcd16_version_str(pmf_converter_version).c_str()<<" (PMF v"<<bcd16_version_str(pmf_file_version).c_str()<<")\r\n";
 
     // write data as ascii hex codes
     stack_str32 strbuf;
@@ -1069,7 +1101,7 @@ PFC_MAIN(const char *args_[], unsigned num_args_)
   owner_ptr<bin_input_stream_base> in_file=afs_open_read(ca.input_file.c_str(), 0, fopencheck_none);
   if(!in_file.data)
   {
-    logf("Unable to open file \"%s\" for reading\n\r", ca.input_file.c_str());
+    logf("Unable to open file \"%s\" for reading\r\n", ca.input_file.c_str());
     return -1;
   }
   pmf_song song;
@@ -1087,7 +1119,7 @@ PFC_MAIN(const char *args_[], unsigned num_args_)
   switch(err)
   {
     case pmferr_ok: break;
-    case pmferr_unknown_format: errorf("Unknown input file format - the file not converted \r\n"); return -1;
+    case pmferr_unknown_format: errorf("Unknown input file format - the file not converted\r\n"); return -1;
     case pmferr_conversion_failure: errorf("File conversion failed\r\n"); return -1;
   }
 

@@ -60,6 +60,19 @@ struct pmf_instrument_header
 };
 //----------------------------------------------------------------------------
 
+//============================================================================
+// e_pmf_inst_flags
+//============================================================================
+enum e_pmf_inst_flags
+{
+  pmfinstflag_16bit      = 0x01,
+  pmfinstflag_bidi_loop  = 0x02,
+};
+//----------------------------------------------------------------------------
+
+//============================================================================
+// instrument data offsets
+//============================================================================
 enum {pmfcfg_instrument_metadata_size=sizeof(pmf_instrument_header)};
 enum {pmfcfg_offset_inst_offset=PFC_OFFSETOF(pmf_instrument_header, data_offset)};
 enum {pmfcfg_offset_inst_length=PFC_OFFSETOF(pmf_instrument_header, length)};
