@@ -40,6 +40,7 @@
 
 // new
 class pmf_player;
+typedef void(*pmf_row_callback_t)(void *custom_data_, uint8_t channel_idx_, uint8_t &note_idx_, uint8_t &inst_idx_, uint8_t &volume_, uint8_t &effect_, uint8_t &effect_data_);
 //---------------------------------------------------------------------------
 
 
@@ -47,10 +48,61 @@ class pmf_player;
 // PMF player config
 //===========================================================================
 #define PMF_AUDIO_LEVEL 2
-#define PMF_LINEAR_INTERPOLATION         // interpolate samples linearly for better sound quality (more CPU intensive)
-enum {pmfplayer_sampling_rate=22050};    // playback frequency in Hz
-enum {pmfplayer_max_channels=32};        // maximum number of audio playback channels
+#define PMF_LINEAR_INTERPOLATION         // interpolate samples linearly for better sound quality (more MCU intensive)
+//#define PMF_SERIAL_LOGS                  // enable logging to serial output (disable to save memory)
+enum {pmfplayer_sampling_rate=22050};    // playback frequency in Hz (increase for better quality, reduce for less MCU perf hit)
+enum {pmfplayer_max_channels=16};        // maximum number of audio playback channels (reduce to save memory)
 enum {pmfplayer_led_beat_ticks=1};       // number of ticks to display LED upon not hit
+//---------------------------------------------------------------------------
+
+
+//===========================================================================
+// e_pmf_effect/e_pmf_subfx
+//===========================================================================
+enum e_pmf_effect
+{
+  // global control
+  pmffx_set_speed_tempo,   // [1, 255], [1, 32]=speed, [33, 255]=tempo
+  pmffx_position_jump,     // [0, song_len-1]
+  pmffx_pattern_break,     // [0, 255]
+  // channel effects
+  pmffx_volume_slide,      // [00xxyyyy], x=slide type (0=slide down, 1=slide up, 2=fine slide down, 3=fine slide up), y=slide value [1, 15], if y=0, use previous slide type & value (x is ignored).
+  pmffx_note_slide_down,   // [1, 0xdf] = normal slide, [0xe0, 0xef] = extra fine slide, [0xf0, 0xff] = fine slide, 0=use previous slide value
+  pmffx_note_slide_up,     // [1, 0xdf] = normal slide, [0xe0, 0xef] = extra fine slide, [0xf0, 0xff] = fine slide, 0=use previous slide value
+  pmffx_note_slide,        // [1, 0xdf] = slide, 0=use previous slide value, [0xe0, 0xff]=unused
+  pmffx_arpeggio,          // x=[0, 15], y=[0, 15]
+  pmffx_vibrato,           // [xxxxyyyy], x=vibrato speed, y=vibrato depth
+  pmffx_tremolo,           // [xxxxyyyy], x=tremolo speed, y=tremolo depth
+  pmffx_note_vol_slide,    // [000xyyyy], x=vol slide type (0=down, 1=up), y=vol slide value [1, 15], if y=0, use previous slide type & value (x is ignored).
+  pmffx_vibrato_vol_slide, // [000xyyyy], x=vol slide type (0=down, 1=up), y=vol slide value [1, 15], if y=0, use previous slide type & value (x is ignored).
+  pmffx_retrig_vol_slide,  // [xxxxyyyy], x=volume slide param, y=sample retrigger frequency
+  pmffx_set_sample_offset, // [xxxxxxxx], offset=x*256
+  pmffx_subfx,             // [xxxxyyyy], x=sub-effect, y=sub-effect value
+};
+enum e_pmf_subfx
+{
+  pmfsubfx_set_glissando,    // 0=off, 1=on (when enabled "note slide" slides half a not at a time)
+  pmfsubfx_set_finetune,     // [-8, 7]
+  pmfsubfx_set_vibrato_wave, // [0xyy], x=[0=retrigger, 1=no retrigger], yy=vibrato wave=[0=sine, 1=ramp down, 2=square, 3=random]
+  pmfsubfx_set_tremolo_wave, // [0xyy], x=[0=retrigger, 1=no retrigger], yy=tremolo wave=[0=sine, 1=ramp down, 2=square, 3=random]
+  pmfsubfx_pattern_delay,    // [1, 15]
+  pmfsubfx_pattern_loop,     // [0, 15], 0=set loop start, >0 = loop N times from loop start
+  pmfsubfx_note_cut,         // [0, 15], cut on X tick
+  pmfsubfx_note_delay,       // [0, 15], delay X ticks
+};
+//---------------------------------------------------------------------------
+
+
+//===========================================================================
+// pmf_channel_info
+//===========================================================================
+struct pmf_channel_info
+{
+  uint8_t base_note;
+  uint8_t volume;
+  uint8_t effect;
+  uint8_t effect_data;
+};
 //---------------------------------------------------------------------------
 
 
@@ -60,17 +112,34 @@ enum {pmfplayer_led_beat_ticks=1};       // number of ticks to display LED upon 
 class pmf_player
 {
 public:
-  // construction
+  // construction and playback setup
   pmf_player();
   ~pmf_player();
+  void load(const void *pmem_pmf_file_);
+  void enable_playback_channels(uint8_t num_channels_);
+  void set_row_callback(pmf_row_callback_t, void *custom_data_=0);
+  //-------------------------------------------------------------------------
+
+  // PMF accessors
+  uint8_t num_pattern_channels() const;
+  uint8_t num_playback_channels() const;
+  uint16_t playlist_length() const;
   //-------------------------------------------------------------------------
 
   // player control
-  void start(const void *pmem_pmf_file_);
+  void start(uint16_t playlist_pos_=0);
   void stop();
   void update();
   //-------------------------------------------------------------------------
 
+  // playback state accessors
+  bool is_playing() const;
+  uint8_t playlist_pos() const;
+  uint8_t pattern_row() const;
+  uint8_t pattern_speed() const;
+  pmf_channel_info channel_info(uint8_t channel_idx_) const;
+  //-------------------------------------------------------------------------
+  
 private:
   struct audio_channel;
   struct mixer_buffer;
@@ -147,26 +216,29 @@ private:
   };
   //-------------------------------------------------------------------------
 
-  // audio assets
+  // PMF info
   const uint8_t *m_pmf_file;
   const uint8_t *m_pmf_pattern_meta;
   const uint8_t *m_pmf_instrument_meta;
+  pmf_row_callback_t m_row_callback;
+  void *m_row_callback_custom_data;
+  uint16_t m_flags;  // e_pmf_flags
+  uint16_t m_note_period_min;
+  uint16_t m_note_period_max;
   uint8_t m_note_slide_speed;
+  uint8_t m_num_pattern_channels;
   // audio channel states
   uint8_t m_num_playback_channels;
-  uint8_t m_num_pattern_channels;
-  uint16_t m_flags;  // e_pmf_flags
+  uint8_t m_num_processed_pattern_channels;
   audio_channel m_channels[pmfplayer_max_channels];
   // audio buffer state
   uint16_t m_num_batch_samples;
   uint16_t m_batch_pos;
   // pattern playback state
-  uint8_t m_current_pattern_playlist_pos;
+  uint16_t m_current_pattern_playlist_pos;
   uint8_t m_current_pattern_last_row;
   uint8_t m_current_pattern_row_idx;
   uint8_t m_current_row_tick;
-  uint16_t m_note_period_min;
-  uint16_t m_note_period_max;
   uint8_t m_speed;
   uint8_t m_arpeggio_counter;
   uint8_t m_pattern_delay;

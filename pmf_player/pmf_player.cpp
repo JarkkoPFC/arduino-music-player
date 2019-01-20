@@ -58,7 +58,10 @@ struct pmf_header
 // PMF format config
 //===========================================================================
 // PMF config
+enum {pmf_file_version=0x1210};      // v1.21
 // PMF file structure
+enum {pmfcfg_offset_signature=PFC_OFFSETOF(pmf_header, signature)};
+enum {pmfcfg_offset_version=PFC_OFFSETOF(pmf_header, version)};
 enum {pmfcfg_offset_flags=PFC_OFFSETOF(pmf_header, flags)};
 enum {pmfcfg_offset_init_speed=PFC_OFFSETOF(pmf_header, initial_speed)};
 enum {pmfcfg_offset_init_tempo=PFC_OFFSETOF(pmf_header, initial_tempo)};
@@ -102,37 +105,6 @@ enum {pmfcfg_note_off=121};
 // PMF effects
 enum {num_subfx_value_bits=4};
 enum {subfx_value_mask=~(-1<<num_subfx_value_bits)};
-enum e_pmf_effect
-{
-  // global control
-  pmffx_set_speed_tempo,   // [1, 255]
-  pmffx_position_jump,     // [0, song_len-1]
-  pmffx_pattern_break,     // [0, 255]
-  // channel effects
-  pmffx_volume_slide,      // [00xxyyyy], x=slide type (0=slide down, 1=slide up, 2=fine slide down, 3=fine slide up), y=slide value [1, 15], if y=0, use previous slide type & value (x is ignored).
-  pmffx_note_slide_down,   // [1, 0xdf] = normal slide, [0xe0, 0xef] = extra fine slide, [0xf0, 0xff] = fine slide, 0=use previous slide value
-  pmffx_note_slide_up,     // [1, 0xdf] = normal slide, [0xe0, 0xef] = extra fine slide, [0xf0, 0xff] = fine slide, 0=use previous slide value
-  pmffx_note_slide,        // [1, 0xdf] = slide, 0=use previous slide value, [0xe0, 0xff]=unused
-  pmffx_arpeggio,          // x=[0, 15], y=[0, 15]
-  pmffx_vibrato,           // [xxxxyyyy], x=vibrato speed, y=vibrato depth
-  pmffx_tremolo,           // [xxxxyyyy], x=tremolo speed, y=tremolo depth
-  pmffx_note_vol_slide,    // [000xyyyy], x=vol slide type (0=down, 1=up), y=vol slide value [1, 15], if y=0, use previous slide type & value (x is ignored).
-  pmffx_vibrato_vol_slide, // [000xyyyy], x=vol slide type (0=down, 1=up), y=vol slide value [1, 15], if y=0, use previous slide type & value (x is ignored).
-  pmffx_retrig_vol_slide,  // [xxxxyyyy], x=volume slide param, y=sample retrigger frequency
-  pmffx_set_sample_offset, // [xxxxxxxx], offset=x*256
-  pmffx_subfx,             // [xxxxyyyy], x=sub-effect, y=sub-effect value
-};
-enum e_pmf_subfx
-{
-  pmfsubfx_set_glissando,    // 0=off, 1=on (when enabled "note slide" slides half a not at a time)
-  pmfsubfx_set_finetune,     // [-8, 7]
-  pmfsubfx_set_vibrato_wave, // [0xyy], x=[0=retrigger, 1=no retrigger], yy=vibrato wave=[0=sine, 1=ramp down, 2=square, 3=random]
-  pmfsubfx_set_tremolo_wave, // [0xyy], x=[0=retrigger, 1=no retrigger], yy=tremolo wave=[0=sine, 1=ramp down, 2=square, 3=random]
-  pmfsubfx_pattern_delay,    // [1, 15]
-  pmfsubfx_pattern_loop,     // [0, 15], 0=set loop start, >0 = loop N times from loop start
-  pmfsubfx_note_cut,         // [0, 15], cut on X tick
-  pmfsubfx_note_delay,       // [0, 15], delay X ticks
-};
 enum e_pmf_volfx
 {
   pmfvolfx_volume_slide,
@@ -156,6 +128,21 @@ static const int8_t PROGMEM s_waveforms[3][32]=
   {-2, -6, -10, -14, -18, -22, -26, -30, -34, -38, -42, -46, -50, -54, -58, -62, -66, -70, -74, -78, -82, -86, -90, -94, -98, -102, -106, -110, -114, -118, -122, -126}, // ramp down-wave
   {127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127}, // square-wave
 };
+// logging
+#ifdef PMF_SERIAL_LOGS
+void logf(const char *fs_, ...)
+{
+  char buf[64];
+  va_list args;
+  va_start(args, fs_);
+  sprintf(buf, fs_, args);
+  va_end(args);
+  Serial.print(buf);
+}
+#define PMF_SERIAL_LOG(x__) logf x__
+#else
+#define PMF_SERIAL_LOG(x__)
+#endif
 //---------------------------------------------------------------------------
 
 
@@ -247,6 +234,9 @@ namespace
 //===========================================================================
 pmf_player::pmf_player()
 {
+  m_pmf_file=0;
+  m_row_callback=0;
+  m_speed=0;
 }
 //----
 
@@ -254,20 +244,72 @@ pmf_player::~pmf_player()
 {
   stop();
 }
-//---------------------------------------------------------------------------
+//----
 
-void pmf_player::start(const void *pmem_pmf_file_)
+void pmf_player::load(const void *pmem_pmf_file_)
 {
+  // check for valid PMF file
+  const uint8_t *pmf_file=static_cast<const uint8_t*>(pmem_pmf_file_);
+  if(pgm_read_dword(pmf_file+pmfcfg_offset_signature)!=0x78666d70)
+  {
+    PMF_SERIAL_LOG(("Error: Invalid PMF file. Please use pmf_converter to generate the file.\r\n"));
+    return;
+  }
+  if((pgm_read_word(pmf_file+pmfcfg_offset_version)&0xfff0)!=pmf_file_version)
+  {
+    PMF_SERIAL_LOG(("Error: PMF file version mismatch. Please use matching pmf_converter to generate the file.\r\n"));
+    return;
+  }
+
   // read PMF properties
-  m_pmf_file=static_cast<const uint8_t*>(pmem_pmf_file_);
+  m_pmf_file=pmf_file;
   m_num_pattern_channels=pgm_read_byte(m_pmf_file+pmfcfg_offset_num_channels);
-  m_num_playback_channels=m_num_pattern_channels<pmfplayer_max_channels?m_num_pattern_channels:pmfplayer_max_channels;
+  enable_playback_channels(m_num_pattern_channels);
   m_flags=pgm_read_word(m_pmf_file+pmfcfg_offset_flags);
   m_pmf_instrument_meta=m_pmf_file+((pmfcfg_offset_playlist+pgm_read_word(m_pmf_file+pmfcfg_offset_playlist_length)+3)&-4);
   m_pmf_pattern_meta=m_pmf_instrument_meta+sizeof(pmf_instrument_header)*pgm_read_byte(m_pmf_file+pmfcfg_offset_num_instruments);
   m_note_slide_speed=m_flags&pmfflag_linear_freq_table?4:2;
+  PMF_SERIAL_LOG(("PMF file loaded (%i channels)\r\n", m_num_pattern_channels));
+}
+//----
 
+void pmf_player::enable_playback_channels(uint8_t num_channels_)
+{
+  if(m_pmf_file)
+    m_num_playback_channels=num_channels_<pmfplayer_max_channels?num_channels_:pmfplayer_max_channels;
+}
+//----
+
+void pmf_player::set_row_callback(pmf_row_callback_t callback_, void *custom_data_)
+{
+  m_row_callback=callback_;
+  m_row_callback_custom_data=custom_data_;
+}
+//---------------------------------------------------------------------------
+
+uint8_t pmf_player::num_pattern_channels() const
+{
+  return m_pmf_file?m_num_pattern_channels:0;
+}
+//----
+
+uint8_t pmf_player::num_playback_channels() const
+{
+  return m_pmf_file?m_num_playback_channels:0;
+}
+//----
+
+uint16_t pmf_player::playlist_length() const
+{
+  return m_pmf_file?pgm_read_word(m_pmf_file+pmfcfg_offset_playlist_length):0;
+}
+//---------------------------------------------------------------------------
+
+void pmf_player::start(uint16_t playlist_pos_)
+{
   // initialize channels
+  if(!m_pmf_file)
+    return;
   memset(m_channels, 0, sizeof(m_channels));
   for(unsigned ci=0; ci<m_num_playback_channels; ++ci)
   {
@@ -276,7 +318,8 @@ void pmf_player::start(const void *pmem_pmf_file_)
   }
 
   // init playback state
-  init_pattern(0);
+  m_num_processed_pattern_channels=min(m_num_pattern_channels, m_num_playback_channels);
+  init_pattern(playlist_pos_<pgm_read_word(m_pmf_file+pmfcfg_offset_playlist_length)?playlist_pos_:0);
   m_speed=pgm_read_byte(m_pmf_file+pmfcfg_offset_init_speed);
   m_note_period_min=pgm_read_word(m_pmf_file+pmfcfg_offset_note_period_min);
   m_note_period_max=pgm_read_word(m_pmf_file+pmfcfg_offset_note_period_max);
@@ -288,18 +331,23 @@ void pmf_player::start(const void *pmem_pmf_file_)
   // start playback
   m_batch_pos=0;
   start_playback();
+  PMF_SERIAL_LOG(("PMF playback started (%i channels)\r\n", m_num_playback_channels));
 }
 //----
 
 void pmf_player::stop()
 {
-  stop_playback();
+  if(m_speed)
+    stop_playback();
+  m_speed=0;
 }
 //----
 
 void pmf_player::update()
 {
   // check if audio buffer should be updated
+  if(!m_note_slide_speed)
+    return;
   mixer_buffer subbuffer=get_mixer_buffer();
   if(!subbuffer.num_samples)
     return;
@@ -332,6 +380,54 @@ void pmf_player::update()
       m_batch_pos=0;
     }
   } while(subbuffer.num_samples);
+}
+//---------------------------------------------------------------------------
+
+bool pmf_player::is_playing() const
+{
+  return m_speed!=0;
+}
+//----
+
+uint8_t pmf_player::playlist_pos() const
+{
+  return m_speed?m_current_pattern_playlist_pos:0;
+}  
+//----
+
+uint8_t pmf_player::pattern_row() const
+{
+  return m_speed?m_current_pattern_row_idx:0;
+}  
+//----
+
+uint8_t pmf_player::pattern_speed() const
+{
+  return m_speed?m_speed:0;
+}
+//----
+
+pmf_channel_info pmf_player::channel_info(uint8_t channel_idx_) const
+{
+  pmf_channel_info info;
+  if(channel_idx_<m_num_playback_channels)
+  {
+    // collect channel info
+    const audio_channel &chl=m_channels[channel_idx_];
+    info.base_note=chl.base_note_idx;
+    info.volume=chl.sample_volume;
+    info.effect=chl.effect;
+    info.effect_data=chl.effect_data;
+  }
+  else
+  {
+    // setup no-info
+    info.base_note=0xff;
+    info.volume=0;
+    info.effect=0xff;
+    info.effect_data=0;
+  }
+  return info;
 }
 //---------------------------------------------------------------------------
 
@@ -611,7 +707,7 @@ void pmf_player::process_pattern_row()
   // store current track positions
   const uint8_t *current_track_poss[pmfplayer_max_channels];
   uint8_t current_track_bit_poss[pmfplayer_max_channels];
-  for(uint8_t ci=0; ci<m_num_playback_channels; ++ci)
+  for(uint8_t ci=0; ci<m_num_processed_pattern_channels; ++ci)
   {
     audio_channel &chl=m_channels[ci];
     current_track_poss[ci]=chl.track_pos;
@@ -626,7 +722,25 @@ void pmf_player::process_pattern_row()
     // get note, instrument, volume and effect for the channel
     audio_channel &chl=m_channels[ci];
     uint8_t note_idx=0xff, inst_idx=0xff, volume=0xff, effect=0xff, effect_data, sample_start_pos=0;
-    process_track_row(chl, note_idx, inst_idx, volume, effect, effect_data);
+    if(ci<m_num_processed_pattern_channels)
+      process_track_row(chl, note_idx, inst_idx, volume, effect, effect_data);
+    if(m_row_callback)
+    {
+      // apply custom track data
+      uint8_t custom_note_idx=0xff, custom_inst_idx=0xff, custom_volume=0xff, custom_effect=0xff, custom_effect_data;
+      (*m_row_callback)(m_row_callback_custom_data, ci, custom_note_idx, custom_inst_idx, custom_volume, custom_effect, custom_effect_data);
+      if(custom_note_idx<12*10 || custom_note_idx==pmfcfg_note_cut || custom_note_idx==pmfcfg_note_off)
+        note_idx=custom_note_idx;
+      if(custom_inst_idx<pgm_read_byte(m_pmf_file+pmfcfg_offset_num_instruments))
+        inst_idx=custom_inst_idx;
+      if(custom_volume!=0xff)
+        volume=custom_volume;
+      if(custom_effect!=0xff)
+      {
+        effect=custom_effect;
+        effect_data=custom_effect_data;
+      }
+    }
 
     // check for note cut/off
     if(note_idx==pmfcfg_note_cut)
@@ -875,7 +989,7 @@ void pmf_player::process_pattern_row()
               {
                 // set loop start
                 m_pattern_loop_row_idx=m_current_pattern_row_idx;
-                for(unsigned ci=0; ci<m_num_playback_channels; ++ci)
+                for(unsigned ci=0; ci<m_num_processed_pattern_channels; ++ci)
                 {
                   audio_channel &chl=m_channels[ci];
                   chl.track_loop_pos=current_track_poss[ci];
@@ -915,7 +1029,7 @@ void pmf_player::process_pattern_row()
   // check for pattern loop
   if(loop_pattern)
   {
-    for(unsigned ci=0; ci<m_num_playback_channels; ++ci)
+    for(unsigned ci=0; ci<m_num_processed_pattern_channels; ++ci)
     {
       audio_channel &chl=m_channels[ci];
       chl.track_pos=chl.track_loop_pos;
@@ -939,6 +1053,8 @@ void pmf_player::process_pattern_row()
 void pmf_player::process_track_row(audio_channel &chl_, uint8_t &note_idx_, uint8_t &inst_idx_, uint8_t &volume_, uint8_t &effect_, uint8_t &effect_data_)
 {
   // get data mask
+  if(chl_.track_pos==m_pmf_file)
+    return;
   uint8_t data_mask=0;
   bool read_dmask=false;
   switch(chl_.decomp_type&0x03)
@@ -1031,15 +1147,17 @@ void pmf_player::init_pattern(uint8_t playlist_pos_, uint8_t row_)
   // initialize pattern at given playlist location and pattern row
   const uint8_t *pattern=m_pmf_pattern_meta+pgm_read_byte(m_pmf_file+pmfcfg_offset_playlist+playlist_pos_)*(pmfcfg_pattern_metadata_header_size+pmfcfg_pattern_metadata_track_offset_size*m_num_pattern_channels);
   m_current_pattern_last_row=pgm_read_byte(pattern+pmfcfg_offset_pattern_metadata_last_row);
-  for(unsigned ci=0; ci<m_num_playback_channels; ++ci)
+  for(unsigned ci=0; ci<m_num_processed_pattern_channels; ++ci)
   {
     // init audio track
     audio_channel &chl=m_channels[ci];
-    chl.track_pos=m_pmf_file+pgm_read_word(pattern+pmfcfg_offset_pattern_metadata_track_offsets+ci*pmfcfg_pattern_metadata_track_offset_size);
+    uint16_t track_offs=pgm_read_word(pattern+pmfcfg_offset_pattern_metadata_track_offsets+ci*pmfcfg_pattern_metadata_track_offset_size);
+    chl.track_pos=m_pmf_file+track_offs;
     chl.track_bit_pos=0;
-    chl.decomp_type=read_bits(chl.track_pos, chl.track_bit_pos, 4)&15;
     chl.track_loop_pos=chl.track_pos;
     chl.track_loop_bit_pos=chl.track_bit_pos;
+    if(track_offs)
+      chl.decomp_type=read_bits(chl.track_pos, chl.track_bit_pos, 4)&15;
 
     // skip to given row
     uint8_t note_idx, inst_idx, volume, effect, effect_data;

@@ -64,7 +64,11 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
 
   // setup song
   song_.name=song_name;
-  song_.num_channels=32;
+  unsigned num_channels=0;
+  for(unsigned i=0; i<32; ++i)
+    if(chl_settings[i]!=255)
+      ++num_channels;
+  song_.num_channels=num_channels;
   song_.flags=0;
   song_.initial_speed=init_speed?init_speed:6;
   song_.initial_tempo=init_tempo<32?125:init_tempo;
@@ -178,14 +182,17 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
   song_.num_valid_samples=song_.num_valid_instruments;
 
   // read patterns
+  pmf_pattern_track_row dummy_track_row;
   song_.patterns.resize(num_patterns);
-  for(unsigned i=0; i<num_patterns; ++i)
+  for(unsigned pi=0; pi<num_patterns; ++pi)
   {
     // parse packed pattern data
-    unsigned file_offset=pat_pptrs[i]*16;
+    unsigned file_offset=pat_pptrs[pi]*16;
+    pmf_pattern &pat=song_.patterns[pi];
+    pat.rows.resize(64*num_channels);
+    if(!file_offset)
+      continue;
     in_file_.seek(file_offset+2);
-    pmf_pattern &pat=song_.patterns[i];
-    pat.rows.resize(64*32);
     usize_t start_pattern_data_pos=in_file_.pos();
     unsigned row=0;
     while(row<64)
@@ -201,7 +208,8 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
 
         // unpack data
         uint8 channel_idx=(desc&31);
-        pmf_pattern_track_row &track_row=pat.rows[row*32+channel_idx];
+        bool is_valid_chl=channel_idx<num_channels && chl_settings[channel_idx]<16;
+        pmf_pattern_track_row &track_row=is_valid_chl?pat.rows[row*num_channels+channel_idx]:dummy_track_row;
         if(desc&32)
         {
           uint8 note, instrument;
@@ -488,10 +496,6 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
             } break;
           }
         }
-
-        // check for valid channel (ignore Adlib channels)
-        if(chl_settings[channel_idx]>=16)
-          track_row.clear();
       }
       ++row;
     }

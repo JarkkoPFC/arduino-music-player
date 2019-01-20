@@ -40,8 +40,8 @@ using namespace pfc;
 // PMF format config
 //============================================================================
 // PMF config
-enum {pmf_converter_version=0x0410}; // v0.41
-enum {pmf_file_version=0x1200};      // v1.2
+enum {pmf_converter_version=0x0420}; // v0.42
+enum {pmf_file_version=0x1210};      // v1.21
 // PMF file structure
 enum {pmfcfg_offset_flags=PFC_OFFSETOF(pmf_header, flags)};
 enum {pmfcfg_offset_init_speed=PFC_OFFSETOF(pmf_header, initial_speed)};
@@ -123,6 +123,7 @@ struct command_arguments
   {
     max_channels=64;
     output_binary=true;
+    enable_optim=true;
     suppress_copyright=false;
   }
   //----
@@ -132,6 +133,7 @@ struct command_arguments
   heap_str output_file;
   unsigned max_channels;
   bool output_binary;
+  bool enable_optim;
   bool suppress_copyright;
 };
 //----
@@ -164,6 +166,7 @@ bool parse_command_arguments(command_arguments &ca_, const char **args_, unsigne
                  "\r\n"
                  "  -hex            Output data as comma separated ASCII hex codes (instead of binary)\r\n"
                  "  -ch <num_chl>   Maximum number of channels (Default: 64)\r\n"
+                 "  -dro            Disable data reference optimizations\r\n"
                  "\r\n"
                  "  -h              Print this screen\n"
                  "  -c              Suppress copyright message\r\n", 
@@ -202,9 +205,9 @@ bool parse_command_arguments(command_arguments &ca_, const char **args_, unsigne
           }
         } break;
 
-        // suppress copyright test
         case 'c':
         {
+          // suppress copyright test
           if(arg_size==2)
             ca_.suppress_copyright=true;
           else if(arg_size==3 && i<num_args_-1 && str_ieq(args_[i], "-ch"))
@@ -214,6 +217,13 @@ bool parse_command_arguments(command_arguments &ca_, const char **args_, unsigne
             if(str_to_int(max_channels, args_[i+1]) && max_channels>0)
               ca_.max_channels=max_channels;
           }
+        } break;
+
+        case 'd':
+        {
+          // disable data reference optimizations
+          if(arg_size==4 && str_ieq(args_[i], "-dro"))
+            ca_.enable_optim=false;
         } break;
       }
     }
@@ -530,7 +540,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   for(unsigned pi=0; pi<num_patterns; ++pi)
   {
     pmf_pattern_info &pinfo=pat_infos[pi];
-    if(pinfo.is_referred)
+    if(!ca_.enable_optim || pinfo.is_referred)
       pinfo.index=num_active_patterns++;
   }
 
@@ -541,7 +551,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   for(unsigned pi=0; pi<num_patterns; ++pi)
   {
     pmf_pattern_info &pinfo=pat_infos[pi];
-    if(!pinfo.is_referred)
+    if(ca_.enable_optim && !pinfo.is_referred)
       continue;
     pinfo.num_rows=song_.patterns[pi].num_rows;
     PFC_ASSERT(pinfo.num_rows>0 && pinfo.num_rows<=256);
@@ -568,7 +578,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   array<uint8> active_channel_map;
   for(uint8 i=0; i<num_channels; ++i)
   {
-    if(active_channels[i] && active_channel_map.size()<ca_.max_channels)
+    if(!ca_.enable_optim || (active_channels[i] && active_channel_map.size()<ca_.max_channels))
       active_channel_map.push_back(i);
   }
   const usize_t num_active_channels=active_channel_map.size();
@@ -582,7 +592,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   {
     const pmf_instrument &inst=song_.instruments[ii];
     instrument_info &iinfo=inst_infos[ii];
-    if(iinfo.is_referred)
+    if(!ca_.enable_optim || iinfo.is_referred)
     {
       const pmf_sample *smp=inst.sample_idx<song_.samples.size()?&song_.samples[inst.sample_idx]:0;
       if(smp && smp->length)
@@ -621,7 +631,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   for(unsigned si=0; si<num_samples; ++si)
   {
     sample_info &sinfo=smp_infos[si];
-    if(sinfo.is_referred)
+    if(!ca_.enable_optim || sinfo.is_referred)
     {
       sinfo.index=num_active_samples++;
       sinfo.data_offset=total_sample_data_bytes;
@@ -636,7 +646,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   {
     // check if pattern is referred by the playlist
     pmf_pattern_info &pinfo=pat_infos[pi];
-    if(!pinfo.is_referred)
+    if(ca_.enable_optim && !pinfo.is_referred)
       continue;
 
     const pmf_pattern &pattern=song_.patterns[pi];
@@ -684,7 +694,8 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
     }
   }
   usize_t num_tracks=tracks.size();
-  float track_uniqueness=100.0f*float(num_tracks)/float(num_active_patterns*num_active_channels);
+  unsigned num_chl_tracks=num_active_patterns*num_active_channels;
+  float track_uniqueness=num_chl_tracks?100.0f*float(num_tracks)/float(num_chl_tracks):0;
 
   // compress tracks
   usize_t total_compressed_track_bytes=0;
@@ -730,6 +741,8 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
       if(pass==1)
       {
         // get compression type that results in the smallest size
+        if(num_empty_rows==num_rows)
+          break;
         const usize_t total_num_dmask4_packed_bits_sparse=total_num_dmask4_packed_bits-num_empty_rows*4+num_rows;
         const usize_t total_num_dmask8_packed_bits_sparse=total_num_dmask8_packed_bits-num_empty_rows*8+num_rows;
         const usize_t total_num_dmask4_packed_bits_dmask_ref=total_num_dmask4_packed_bits-num_rows*(4-2)+total_num_dmasks*4;
@@ -965,21 +978,25 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   for(unsigned ii=0; ii<num_instruments; ++ii)
   {
     const instrument_info &iinfo=inst_infos[ii];
-    if(iinfo.is_referred)
+    if(!ca_.enable_optim || iinfo.is_referred)
     {
       const pmf_instrument &inst=song_.instruments[ii];
-      const pmf_sample &smp=song_.samples[inst.sample_idx];
-      const sample_info &sinfo=smp_infos[inst.sample_idx];
-      usize_t sample_file_offset=sample_data_base_offset+sinfo.data_offset;
-      out_stream<<uint32(sample_file_offset);
-      out_stream<<uint32(sinfo.cropped_len);
-      out_stream<<uint32(smp.loop_len<sinfo.cropped_len?smp.loop_len:sinfo.cropped_len);
-      out_stream<<uint16(iinfo.vol_env_offset!=unsigned(-1)?envelope_data_base_offset+iinfo.vol_env_offset:0);
-      out_stream<<uint16(inst.fadeout_speed);
-      out_stream<<int16(smp.finetune);
-      out_stream<<uint8(smp.flags);
-      out_stream<<uint8(smp.volume);
-      ++num_active_inst;
+      unsigned sample_idx=inst.sample_idx;
+      if(sample_idx!=unsigned(-1))
+      {
+        const pmf_sample &smp=song_.samples[sample_idx];
+        const sample_info &sinfo=smp_infos[sample_idx];
+        usize_t sample_file_offset=sample_data_base_offset+sinfo.data_offset;
+        out_stream<<uint32(sample_file_offset);
+        out_stream<<uint32(sinfo.cropped_len);
+        out_stream<<uint32(smp.loop_len<sinfo.cropped_len?smp.loop_len:sinfo.cropped_len);
+        out_stream<<uint16(iinfo.vol_env_offset!=unsigned(-1)?envelope_data_base_offset+iinfo.vol_env_offset:0);
+        out_stream<<uint16(inst.fadeout_speed);
+        out_stream<<int16(smp.finetune);
+        out_stream<<uint8(smp.flags);
+        out_stream<<uint8(smp.volume);
+        ++num_active_inst;
+      }
     }
   }
   float sample_data_compression=song_.total_src_sample_data_bytes?100.0f*float(total_sample_data_bytes)/float(song_.total_src_sample_data_bytes):0.0f;
@@ -988,14 +1005,15 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   for(unsigned pi=0; pi<num_patterns; ++pi)
   {
     const pmf_pattern_info &pinfo=pat_infos[pi];
-    if(pinfo.is_referred)
+    if(!ca_.enable_optim || pinfo.is_referred)
     {
       out_stream<<uint8(pinfo.num_rows-1);
       out_stream<<uint8(0);
       for(unsigned ci=0; ci<num_active_channels; ++ci)
       {
         unsigned chl_idx=active_channel_map[ci];
-        out_stream<<uint16(track_data_base_offset+tracks[pinfo.tracks[chl_idx]].offset);
+        const pmf_pattern_track &track=tracks[pinfo.tracks[chl_idx]];
+        out_stream<<uint16(track.compressed_data.size()?track_data_base_offset+track.offset:0);
       }
     }
   }
@@ -1024,7 +1042,7 @@ void write_pmf_file(const pmf_song &song_, const command_arguments &ca_)
   for(unsigned si=0; si<num_samples; ++si)
   {
     const sample_info &sinfo=smp_infos[si];
-    if(sinfo.is_referred)
+    if(!ca_.enable_optim || sinfo.is_referred)
       out_stream.write_bytes(song_.samples[si].data.data, smp_infos[si].cropped_len);
   }
 

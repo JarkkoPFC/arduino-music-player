@@ -152,6 +152,22 @@ struct it_sample
 
 
 //============================================================================
+// setup_sample
+//============================================================================
+void setup_sample(pmf_sample &pmf_smp_, it_sample &smp_)
+{
+  pmf_smp_.flags=smp_.flags&0x40?pmfinstflag_bidi_loop:0;
+  pmf_smp_.length=(unsigned)smp_.data.size();
+  pmf_smp_.loop_len=smp_.flags&0x10?smp_.loop_end-smp_.loop_begin:0;
+  pmf_smp_.loop_start=smp_.loop_begin;
+  pmf_smp_.finetune=int16(round(log2(smp_.c5speed/8363.0f)*12*128));
+  pmf_smp_.volume=smp_.default_vol<64?smp_.default_vol<<2:255;
+  pmf_smp_.data=smp_.data.steal_data().steal_data();
+}
+//----------------------------------------------------------------------------
+
+
+//============================================================================
 // convert_it
 //============================================================================
 e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
@@ -174,8 +190,10 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
   in_file_>>flags>>special;
   uint8 global_vol, mixing_vol, init_speed, init_tempo;
   in_file_>>global_vol>>mixing_vol>>init_speed>>init_tempo;
+  uint8 chl_pans[max_it_channels];
+  in_file_.seek(0x40);
+  in_file_.read_bytes(chl_pans, max_it_channels);
   uint8 chl_vols[max_it_channels];
-  in_file_.seek(0x80);
   in_file_.read_bytes(chl_vols, max_it_channels);
   if(cmwt<0x200)
   {
@@ -184,7 +202,10 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
   }
 
   // setup song
-  unsigned num_channels=max_it_channels;
+  unsigned num_channels=0;
+  for(unsigned i=0; i<max_it_channels; ++i)
+    if(!(chl_pans[i]&0x80))
+      ++num_channels;
   song_.name=song_name;
   song_.num_channels=num_channels;
   song_.flags=flags&0x8?pmfflag_linear_freq_table:0;
@@ -899,14 +920,7 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
       {
         unsigned sample_idx=unsigned(smp-samples.begin());
         pmf_inst.sample_idx=sample_idx;
-        pmf_sample &pmf_smp=song_.samples[sample_idx];
-        pmf_smp.flags=smp->flags&0x40?pmfinstflag_bidi_loop:0;
-        pmf_smp.length=(unsigned)smp->data.size();
-        pmf_smp.loop_len=smp->flags&0x10?smp->loop_end-smp->loop_begin:0;
-        pmf_smp.loop_start=smp->loop_begin;
-        pmf_smp.finetune=int16(round(log2(smp->c5speed/8363.0f)*12*128));
-        pmf_smp.volume=smp->default_vol<64?smp->default_vol<<2:255;
-        pmf_smp.data=smp->data.steal_data().steal_data();
+        setup_sample(song_.samples[sample_idx], *smp);
       }
 
       // set instrument volume envelope
@@ -945,13 +959,7 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
         // setup PMF instrument
         pmf_instrument &pmf_inst=song_.instruments[si];
         pmf_inst.sample_idx=si;
-        pmf_sample &pmf_smp=song_.samples[si];
-        pmf_smp.length=(unsigned)smp->data.size();
-        pmf_smp.loop_len=smp->flags&16?smp->loop_end-smp->loop_begin:0;
-        pmf_smp.loop_start=smp->loop_begin;
-        pmf_smp.finetune=int16(round(log2(smp->c5speed/8363.0f)*12*128));
-        pmf_smp.volume=smp->default_vol<64?(smp->default_vol<<2)|(smp->default_vol>>2):255;
-        pmf_smp.data=smp->data.steal_data().steal_data();
+        setup_sample(song_.samples[si], *smp);
       }
     }
     song_.num_valid_instruments=song_.num_valid_samples;
