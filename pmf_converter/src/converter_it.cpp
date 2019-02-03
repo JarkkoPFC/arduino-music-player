@@ -156,7 +156,7 @@ struct it_sample
 //============================================================================
 void setup_sample(pmf_sample &pmf_smp_, it_sample &smp_)
 {
-  pmf_smp_.flags=smp_.flags&0x40?pmfinstflag_bidi_loop:0;
+  pmf_smp_.flags=smp_.flags&0x40?pmfsmpflag_bidi_loop:0;
   pmf_smp_.length=(unsigned)smp_.data.size();
   pmf_smp_.loop_len=smp_.flags&0x10?smp_.loop_end-smp_.loop_begin:0;
   pmf_smp_.loop_start=smp_.loop_begin;
@@ -166,6 +166,48 @@ void setup_sample(pmf_sample &pmf_smp_, it_sample &smp_)
 }
 //----------------------------------------------------------------------------
 
+//============================================================================
+// setup_envelope
+//============================================================================
+enum e_envelope_type
+{
+  envtype_volume,
+  envtype_pitch
+};
+//----
+
+void setup_envelope(pmf_envelope &env_, const envelope &it_env_, e_envelope_type env_type_)
+{
+  if(it_env_.flags&0x1)
+  {
+    if(it_env_.flags&0x2)
+    {
+      // set envelope loop
+      env_.loop_start=it_env_.loop_begin;
+      env_.loop_end=it_env_.loop_end;
+    }
+    if(it_env_.flags&0x4)
+    {
+      // set sustain loop
+      env_.sustain_loop_start=it_env_.sustain_loop_begin;
+      env_.sustain_loop_end=it_env_.sustain_loop_end;
+    }
+
+    // setup envelope nodes
+    env_.data.resize(it_env_.num_nodes);
+    for(unsigned i=0; i<it_env_.num_nodes; ++i)
+    {
+      env_.data[i].first=uint16(it_env_.node_points[i].x);
+      uint8 val=it_env_.node_points[i].y;
+      switch(env_type_)
+      {
+        case envtype_volume: env_.data[i].second=uint16(val<64?val<<10:65535); break;
+        case envtype_pitch: env_.data[i].second=uint16(int8(val)<32?0x8000+(val<<10):65535); break;
+      }
+    }
+  }
+}
+//----------------------------------------------------------------------------
 
 //============================================================================
 // convert_it
@@ -201,13 +243,18 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
     return pmferr_conversion_failure;
   }
 
-  // setup song
-  unsigned num_channels=0;
+  // setup channels
+  song_.channels.resize(max_it_channels);
   for(unsigned i=0; i<max_it_channels; ++i)
-    if(!(chl_pans[i]&0x80))
-      ++num_channels;
+  {
+    pmf_channel &chl=song_.channels[i];
+    uint8 cpan=chl_pans[i];
+    if(!(cpan&0x80))
+      chl.panning=cpan<=64?int8(round((cpan*4-128)*127.5f/128.0f)):cpan==100?-128:0;
+  }
+
+  // setup song
   song_.name=song_name;
-  song_.num_channels=num_channels;
   song_.flags=flags&0x8?pmfflag_linear_freq_table:0;
   song_.initial_speed=init_speed;
   song_.initial_tempo=init_tempo;
@@ -265,6 +312,7 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
       in_file_>>env.sustain_loop_begin>>env.sustain_loop_end;
       for(unsigned i=0; i<25; ++i)
         in_file_>>env.node_points[i].y>>env.node_points[i].x;
+      in_file_.skip(1);
     }
   }
 
@@ -458,7 +506,7 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
 
       // unpack pattern
       pattern.num_rows=num_rows;
-      pattern.rows.resize(num_rows*num_channels);
+      pattern.rows.resize(num_rows*max_it_channels);
       pmf_pattern_track_row *pattern_data=pattern.rows.data();
       for(unsigned ri=0; ri<num_rows; ++ri)
       {
@@ -847,15 +895,15 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
           }
         }
 
-        // move to next row
-        pattern_data+=num_channels;
+        // move to the next row
+        pattern_data+=max_it_channels;
       }
     }
     else
     {
       // add empty pattern
       pattern.num_rows=64;
-      pattern.rows.resize(64*num_channels);
+      pattern.rows.resize(64*max_it_channels);
     }
   }
 
@@ -864,11 +912,30 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
   if(flags&0x4)
   {
     song_.instruments.resize(num_insts);
-    bool has_multisample_warn=false;
+    bool is_valid_inst=false;
     for(unsigned ii=0; ii<num_insts; ++ii)
     {
-      // try pick C-5 sample (multi-sample instruments not supported)
       const it_instrument &inst=instruments[ii];
+      pmf_instrument &pmf_inst=song_.instruments[ii];
+      pmf_inst.note_map.resize(120);
+      pmf_note_map_entry *nmap=pmf_inst.note_map.data();
+      for(unsigned si=0; si<120; ++si)
+      {
+        unsigned sample_idx=inst.note_sample_map[si].sample-1;
+        if(sample_idx!=unsigned(-1) && sample_idx<num_samples)
+        {
+          nmap[si].note_idx_offs=int8(inst.note_sample_map[si].note_idx-si);
+          nmap[si].sample_idx=uint8(sample_idx);
+          it_sample *smp=&samples[sample_idx];
+          if(smp->data.size())
+            setup_sample(song_.samples[sample_idx], *smp);
+          is_valid_inst=true;
+        }
+      }
+      if(is_valid_inst)
+        ++song_.num_valid_instruments;
+
+      // try pick C-5 sample
       it_sample *smp=0;
       {
         enum {c5note_idx=5*12};
@@ -890,61 +957,20 @@ e_pmf_error convert_it(bin_input_stream_base &in_file_, pmf_song &song_)
           }
         }
       }
-      if(smp)
-        ++song_.num_valid_instruments;
-
-      if(!has_multisample_warn)
-      {
-        // check for multi-sample instrument
-        uint8 prev_sample_idx=0;
-        for(unsigned i=0; i<120; ++i)
-        {
-          uint8 sample_idx=inst.note_sample_map[i].sample;
-          if(sample_idx && sample_idx!=prev_sample_idx)
-          {
-            if(prev_sample_idx)
-            {
-              warnf("Warning: Multi-sample instruments not supported\r\n");
-              has_multisample_warn=true;
-              break;
-            }
-            prev_sample_idx=sample_idx;
-          }
-        }
-      }
 
       // setup new sample if found
-      pmf_instrument &pmf_inst=song_.instruments[ii];
-      pmf_inst.fadeout_speed=inst.fadeout*64;
-      if(smp && smp->data.size())
+      if(smp)
       {
         unsigned sample_idx=unsigned(smp-samples.begin());
         pmf_inst.sample_idx=sample_idx;
-        setup_sample(song_.samples[sample_idx], *smp);
+        if(smp->data.size())
+          setup_sample(song_.samples[sample_idx], *smp);
       }
 
-      // set instrument volume envelope
-      const envelope &vol_env=inst.envelopes[0];
-      if(vol_env.flags&0x1)
-      {
-        if(vol_env.flags&0x2)
-        {
-          pmf_inst.vol_envelope.loop_start=vol_env.loop_begin;
-          pmf_inst.vol_envelope.loop_end=vol_env.loop_end;
-        }
-        if(vol_env.flags&0x4)
-        {
-          pmf_inst.vol_envelope.sustain_loop_start=vol_env.sustain_loop_begin;
-          pmf_inst.vol_envelope.sustain_loop_end=vol_env.sustain_loop_end;
-        }
-        pmf_inst.vol_envelope.data.resize(vol_env.num_nodes);
-        for(unsigned i=0; i<vol_env.num_nodes; ++i)
-        {
-          pmf_inst.vol_envelope.data[i].first=uint8(vol_env.node_points[i].x);
-          uint16 vol=vol_env.node_points[i].y;
-          pmf_inst.vol_envelope.data[i].second=uint8(vol<64?vol<<2:255);
-        }
-      }
+      // set instrument envelopes
+      pmf_inst.fadeout_speed=inst.fadeout*64;
+      setup_envelope(pmf_inst.vol_envelope, inst.envelopes[0], envtype_volume);
+      setup_envelope(pmf_inst.pitch_envelope, inst.envelopes[2], envtype_pitch);
     }
   }
   else

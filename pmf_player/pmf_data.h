@@ -1,5 +1,5 @@
 //============================================================================
-// PMF Player v0.4
+// PMF Player v0.5
 //
 // Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
@@ -45,43 +45,68 @@ struct pmf_instrument_header;
 
 
 //============================================================================
-// pmf_instrument_header
+// pmf_sample_header
 //============================================================================
-struct pmf_instrument_header
+struct pmf_sample_header
 {
   uint32_t data_offset;
   uint32_t length;
   uint32_t loop_length;
-  uint16_t vol_env_offset;
-  uint16_t fadeout_speed;
   int16_t finetune;
-  uint8_t flags; // e_pmf_inst_flag
-  uint8_t default_volume;
+  uint8_t flags;
+  uint8_t volume;
 };
 //----------------------------------------------------------------------------
 
+
 //============================================================================
-// e_pmf_inst_flags
+// pmf_instrument_header
 //============================================================================
-enum e_pmf_inst_flags
+struct pmf_instrument_header
 {
-  pmfinstflag_16bit      = 0x01,
-  pmfinstflag_bidi_loop  = 0x02,
+  uint16_t sample_idx; // sample index or offset to a note map
+  uint16_t vol_env_offset;
+  uint16_t pitch_env_offset;
+  uint16_t fadeout_speed;
+  uint8_t volume;
+  uint8_t reserved;
 };
 //----------------------------------------------------------------------------
+
+
+//============================================================================
+// e_pmf_sample_flags
+//============================================================================
+enum e_pmf_sample_flags
+{
+  pmfsmpflag_16bit      = 0x01,
+  pmfsmpflag_bidi_loop  = 0x02,
+};
+//----------------------------------------------------------------------------
+
+
+//============================================================================
+// sample data offsets
+//============================================================================
+enum {pmfcfg_sample_metadata_size=sizeof(pmf_sample_header)};
+enum {pmfcfg_offset_smp_data=PFC_OFFSETOF(pmf_sample_header, data_offset)};
+enum {pmfcfg_offset_smp_length=PFC_OFFSETOF(pmf_sample_header, length)};
+enum {pmfcfg_offset_smp_loop_length=PFC_OFFSETOF(pmf_sample_header, loop_length)};
+enum {pmfcfg_offset_smp_finetune=PFC_OFFSETOF(pmf_sample_header, finetune)};
+enum {pmfcfg_offset_smp_flags=PFC_OFFSETOF(pmf_sample_header, flags)};
+enum {pmfcfg_offset_smp_volume=PFC_OFFSETOF(pmf_sample_header, volume)};
+//----------------------------------------------------------------------------
+
 
 //============================================================================
 // instrument data offsets
 //============================================================================
 enum {pmfcfg_instrument_metadata_size=sizeof(pmf_instrument_header)};
-enum {pmfcfg_offset_inst_offset=PFC_OFFSETOF(pmf_instrument_header, data_offset)};
-enum {pmfcfg_offset_inst_length=PFC_OFFSETOF(pmf_instrument_header, length)};
-enum {pmfcfg_offset_inst_loop_length=PFC_OFFSETOF(pmf_instrument_header, loop_length)};
+enum {pmfcfg_offset_inst_sample_idx=PFC_OFFSETOF(pmf_instrument_header, sample_idx)};
 enum {pmfcfg_offset_inst_vol_env=PFC_OFFSETOF(pmf_instrument_header, vol_env_offset)};
+enum {pmfcfg_offset_inst_pitch_env=PFC_OFFSETOF(pmf_instrument_header, pitch_env_offset)};
 enum {pmfcfg_offset_inst_fadeout_speed=PFC_OFFSETOF(pmf_instrument_header, fadeout_speed)};
-enum {pmfcfg_offset_inst_finetune=PFC_OFFSETOF(pmf_instrument_header, finetune)};
-enum {pmfcfg_offset_inst_flags=PFC_OFFSETOF(pmf_instrument_header, flags)};
-enum {pmfcfg_offset_inst_volume=PFC_OFFSETOF(pmf_instrument_header, default_volume)};
+enum {pmfcfg_offset_inst_volume=PFC_OFFSETOF(pmf_instrument_header, volume)};
 //----------------------------------------------------------------------------
 
 //============================================================================

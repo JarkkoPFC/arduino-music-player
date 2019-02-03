@@ -1,5 +1,5 @@
 //============================================================================
-// PMF Player v0.4
+// PMF Player v0.5
 //
 // Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
@@ -53,11 +53,11 @@ static IntervalTimer s_int_timer;
 void playback_interrupt()
 {
   int16_t *smp_addr=s_buffer_playback_pos;
-  int16_t smp=*smp_addr;
+  uint16_t smp=(*smp_addr+(2048>>PMF_AUDIO_LEVEL));
   *smp_addr=0;
-  smp=2048+(smp<<PMF_AUDIO_LEVEL);
-  smp=smp<0?0:smp>4095?4095:smp;
-  analogWriteDAC0(smp);
+  if(smp>=(4096>>PMF_AUDIO_LEVEL))
+    smp=smp>uint16_t(32767+(2048>>PMF_AUDIO_LEVEL))?0:(4096>>PMF_AUDIO_LEVEL)-1;
+  analogWriteDAC0(smp<<PMF_AUDIO_LEVEL);
   if(++s_buffer_playback_pos==s_buffer+pmfplayer_audio_buffer_size)
     s_buffer_playback_pos=s_buffer;
 }
@@ -92,16 +92,17 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
   do
   {
     // check for active channel
+//    if(channel!=m_channels+4) continue;/**/
     if(!channel->sample_speed)
       continue;
 
     // get channel attributes
-    size_t sample_addr=(size_t)(m_pmf_file+pgm_read_dword(channel->inst_metadata+pmfcfg_offset_inst_offset));
+    size_t sample_addr=(size_t)(m_pmf_file+pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_data));
     uint32_t sample_pos=channel->sample_pos;
     int16_t sample_speed=channel->sample_speed;
-    uint32_t sample_end=uint32_t(pgm_read_dword(channel->inst_metadata+pmfcfg_offset_inst_length))<<8;
-    uint32_t sample_loop_len=pgm_read_dword(channel->inst_metadata+pmfcfg_offset_inst_loop_length)<<8;
-    uint8_t sample_volume=(uint16_t(channel->sample_volume)*channel->vol_env_value)>>8;
+    uint32_t sample_end=uint32_t(pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_length))<<8;
+    uint32_t sample_loop_len=pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_loop_length)<<8;
+    uint8_t sample_volume=(channel->sample_volume*(channel->vol_env.value>>8))>>8;
     uint32_t sample_pos_offs=sample_end-sample_loop_len;
     if(sample_pos<sample_pos_offs)
       sample_pos_offs=0;
@@ -136,7 +137,7 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
         }
 
         // apply normal/bidi loop
-        if(pgm_read_byte(channel->inst_metadata+pmfcfg_offset_inst_flags)&pmfinstflag_bidi_loop)
+        if(pgm_read_byte(channel->smp_metadata+pmfcfg_offset_smp_flags)&pmfsmpflag_bidi_loop)
         {
           sample_pos-=sample_speed*2;
           channel->sample_speed=sample_speed=-sample_speed;

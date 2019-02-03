@@ -52,11 +52,11 @@ enum e_pmf_flags
 {
   pmfflag_linear_freq_table  =0x01,  // 0=Amiga, 1=linear
 };
-// PMF instrument flags
-enum e_pmf_inst_flags
+// PMF sample flags
+enum e_pmf_sample_flags
 {
-  pmfinstflag_16bit      = 0x01,
-  pmfinstflag_bidi_loop  = 0x02,
+  pmfsmpflag_16bit      = 0x01,
+  pmfsmpflag_bidi_loop  = 0x02,
 };
 // PMF special notes
 enum {pmfcfg_note_cut=120};
@@ -128,6 +128,12 @@ struct pmf_header
   uint16 version;
   uint16 flags; // e_pmf_flags
   uint32 file_size;
+  uint32 sample_meta_offs;
+  uint32 instrument_meta_offs;
+  uint32 pattern_meta_offs;
+  uint32 env_data_offs;
+  uint32 nmap_data_offs;
+  uint32 track_data_offs;
   uint8 initial_speed;
   uint8 initial_tempo;
   uint16 note_period_min;
@@ -136,7 +142,23 @@ struct pmf_header
   uint8 num_channels;
   uint8 num_patterns;
   uint8 num_instruments;
+  uint8 num_samples;
   uint8 first_playlist_entry;
+};
+//----------------------------------------------------------------------------
+
+
+//============================================================================
+// pmf_sample_header
+//============================================================================
+struct pmf_sample_header
+{
+  uint32 data_offset;
+  uint32 length;
+  uint32 loop_length;
+  int16 finetune;
+  uint8 flags;
+  uint8 volume;
 };
 //----------------------------------------------------------------------------
 
@@ -146,14 +168,26 @@ struct pmf_header
 //============================================================================
 struct pmf_instrument_header
 {
-  uint32 data_offset;
-  uint32 length;
-  uint32 loop_length;
+  uint16 sample_idx; // sample index or offset to a note map
   uint16 vol_env_offset;
+  uint16 pitch_env_offset;
   uint16 fadeout_speed;
-  int16 finetune;
-  uint8 flags; // e_pmf_inst_flag
-  uint8 default_volume;
+  uint8 volume;
+  uint8 reserved;
+};
+//----------------------------------------------------------------------------
+
+
+//============================================================================
+// pmf_channel
+//============================================================================
+struct pmf_channel
+{
+  // construction
+  pmf_channel();
+  //--------------------------------------------------------------------------
+
+  int8 panning;
 };
 //----------------------------------------------------------------------------
 
@@ -205,11 +239,26 @@ struct pmf_envelope
   bool operator==(const pmf_envelope&) const;
   //--------------------------------------------------------------------------
 
-  uint8 sustain_loop_start;
-  uint8 sustain_loop_end;
   uint8 loop_start;
   uint8 loop_end;
-  array<pair<uint8, uint8> > data;
+  uint8 sustain_loop_start;
+  uint8 sustain_loop_end;
+  array<pair<uint16, uint16> > data;
+};
+//----------------------------------------------------------------------------
+
+
+//============================================================================
+// pmf_note_map_entry
+//============================================================================
+struct pmf_note_map_entry
+{
+  // construction
+  PFC_INLINE pmf_note_map_entry() {note_idx_offs=0; sample_idx=0xff;}
+  //--------------------------------------------------------------------------
+
+  int8 note_idx_offs;
+  uint8 sample_idx;
 };
 //----------------------------------------------------------------------------
 
@@ -225,7 +274,10 @@ struct pmf_instrument
 
   unsigned sample_idx;
   uint16 fadeout_speed;
+  uint8 volume;
   pmf_envelope vol_envelope;
+  pmf_envelope pitch_envelope;
+  array<pmf_note_map_entry> note_map;
 };
 //----------------------------------------------------------------------------
 
@@ -239,11 +291,11 @@ struct pmf_sample
   pmf_sample();
   //--------------------------------------------------------------------------
 
-  uint8 volume;
-  uint8 flags; // e_pmf_inst_flags
   uint32 length;
   uint32 loop_start, loop_len;
   int16 finetune;
+  uint8 flags; // e_pmf_sample_flags
+  uint8 volume;
   owner_data data;
 };
 //----------------------------------------------------------------------------
@@ -259,7 +311,6 @@ struct pmf_song
   //--------------------------------------------------------------------------
 
   heap_str name;
-  unsigned num_channels;
   uint16 flags; // e_pmf_flags
   uint8 initial_speed;
   uint8 initial_tempo;
@@ -269,6 +320,7 @@ struct pmf_song
   unsigned num_valid_samples;
   usize_t total_src_pattern_data_bytes;
   usize_t total_src_sample_data_bytes;
+  array<pmf_channel> channels;
   array<uint8> playlist;
   array<pmf_pattern> patterns;
   array<pmf_instrument> instruments;

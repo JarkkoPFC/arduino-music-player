@@ -28,7 +28,7 @@ void row_callback_test(void *custom_data_, uint8_t channel_idx_, uint8_t &note_i
     static unsigned s_counter=1;
     if(--s_counter==0)
     {
-      note_idx_=0+5*12; // C-5 (note+octave*12, note: 0=C, 1=C#, 2=D, 3=D#, 4=E, 5=F, 6=F#, 7=G, 8=G#, 9=A, 10=A#, 11=B),
+      note_idx_=0+5*12; // C-5 (note+octave*12, note: 0=C, 1=C#, 2=D, 3=D#, 4=E, 5=F, 6=F#, 7=G, 8=G#, 9=A, 10=A#, 11=B)
       inst_idx_=2;      // sample 2
       volume_=63;       // volume 63 (max)
       s_counter=8;      // hit note every 8th row

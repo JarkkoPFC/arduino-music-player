@@ -1,5 +1,5 @@
 //============================================================================
-// PMF Player v0.4
+// PMF Player v0.5
 //
 // Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
@@ -52,7 +52,6 @@ typedef void(*pmf_row_callback_t)(void *custom_data_, uint8_t channel_idx_, uint
 //#define PMF_SERIAL_LOGS                  // enable logging to serial output (disable to save memory)
 enum {pmfplayer_sampling_rate=22050};    // playback frequency in Hz (increase for better quality, reduce for less MCU perf hit)
 enum {pmfplayer_max_channels=16};        // maximum number of audio playback channels (reduce to save memory)
-enum {pmfplayer_led_beat_ticks=1};       // number of ticks to display LED upon not hit
 //---------------------------------------------------------------------------
 
 
@@ -139,27 +138,33 @@ public:
   uint8_t pattern_speed() const;
   pmf_channel_info channel_info(uint8_t channel_idx_) const;
   //-------------------------------------------------------------------------
-  
+
 private:
-  struct audio_channel;
   struct mixer_buffer;
+  struct envelope_state;
+  struct audio_channel;
+  // platform specific functions (implemented in platform specific files)
   void start_playback();
   void stop_playback();
   void mix_buffer(mixer_buffer&, unsigned num_samples_);
   mixer_buffer get_mixer_buffer();
+  void visualize_pattern_frame();
+  // audio effects
   void apply_channel_effect_volume_slide(audio_channel&);
   void apply_channel_effect_note_slide(audio_channel&);
   void apply_channel_effect_vibrato(audio_channel&);
   void apply_channel_effects();
-  void evaluate_envelopes();
   bool init_effect_volume_slide(audio_channel&, uint8_t effect_data_);
   bool init_effect_note_slide(audio_channel&, uint8_t slide_speed_, uint16_t target_note_pediod_);
   void init_effect_vibrato(audio_channel&, uint8_t vibrato_depth_, uint8_t vibrato_speed_);
-  void hit_note(audio_channel&, uint8_t note_idx_, uint32_t sample_start_pos_);
+  void evaluate_envelope(envelope_state&, uint16_t env_data_offs_, bool is_note_off_);
+  void evaluate_envelopes();
+  // pattern playback
+  void set_instrument(audio_channel&, uint8_t inst_idx_, uint8_t note_idx_);
+  void hit_note(audio_channel&, uint8_t note_idx_, uint8_t sample_start_pos_, bool reset_sample_pos_);
   void process_pattern_row();
   void process_track_row(audio_channel&, uint8_t &note_idx_, uint8_t &inst_idx_, uint8_t &volume_, uint8_t &effect_, uint8_t &effect_data_);
   void init_pattern(uint8_t playlist_pos_, uint8_t row_=0);
-  void visualize_pattern_frame();
   //-------------------------------------------------------------------------
 
   //=========================================================================
@@ -173,19 +178,42 @@ private:
   //-------------------------------------------------------------------------
 
   //=========================================================================
+  // envelope_state
+  //=========================================================================
+  struct envelope_state
+  {
+    uint16_t tick;
+    int8_t pos;
+    uint16_t value;
+  };
+  //-------------------------------------------------------------------------
+
+  //=========================================================================
   // audio_channel
   //=========================================================================
   struct audio_channel
   {
+    // track state
+    const uint8_t *track_pos;
+    const uint8_t *track_loop_pos;
+    uint8_t track_bit_pos;
+    uint8_t track_loop_bit_pos;
+    uint8_t decomp_type;
+    uint8_t decomp_buf[6][2];
+    uint8_t track_loop_decomp_buf[6][2];
+    // visualization
+    uint8_t note_hit;              // note hit
     // sample playback
     const uint8_t *inst_metadata;
+    const uint8_t *smp_metadata;
     uint32_t sample_pos;           // sample position (24.8 fp)
     int16_t sample_speed;          // sample speed (8.8 fp)
     int16_t sample_finetune;       // sample finetune (9.7 fp)
+    uint16_t note_period;          // current note period
     uint8_t sample_volume;         // sample volume (0.8 fp)
-    // sound effects
-    uint16_t note_period;          // current note period (see s_note_periods for base note periods)
     uint8_t base_note_idx;         // base note index
+    int8_t inst_note_idx_offs;     // instrument note offset
+    // sound effects
     uint8_t effect;                // current effect
     uint8_t effect_data;           // current effect data
     uint8_t vol_effect;            // current volume effect
@@ -200,26 +228,13 @@ private:
     uint8_t fxmem_retrig_count;    // sample retrigger count
     uint8_t fxmem_note_delay_idx;  // note delay note index
     uint16_t vol_fadeout;          // fadeout volume
-    uint8_t vol_env_tick;          // volume envelope ticks
-    int8_t vol_env_pos;            // volume envelope position
-    uint8_t vol_env_value;         // volume envelope value
-    // track state
-    const uint8_t *track_pos;
-    uint8_t track_bit_pos;
-    const uint8_t *track_loop_pos;
-    uint8_t track_loop_bit_pos;
-    uint8_t decomp_type;
-    uint8_t decomp_buf[6][2];
-    uint8_t track_loop_decomp_buf[6][2];
-    // visualization
-    uint8_t note_hit;              // note hit
+    envelope_state vol_env;        // volume envelope
+    envelope_state pitch_env;      // pitch envelope
   };
   //-------------------------------------------------------------------------
 
   // PMF info
   const uint8_t *m_pmf_file;
-  const uint8_t *m_pmf_pattern_meta;
-  const uint8_t *m_pmf_instrument_meta;
   pmf_row_callback_t m_row_callback;
   void *m_row_callback_custom_data;
   uint16_t m_flags;  // e_pmf_flags
@@ -227,6 +242,8 @@ private:
   uint16_t m_note_period_max;
   uint8_t m_note_slide_speed;
   uint8_t m_num_pattern_channels;
+  uint8_t m_num_instruments;
+  uint8_t m_num_samples;
   // audio channel states
   uint8_t m_num_playback_channels;
   uint8_t m_num_processed_pattern_channels;

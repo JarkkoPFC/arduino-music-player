@@ -62,13 +62,23 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
   if(flags&64)
     warnf("Warning: S3M ST3.0 volume slides not supported\r\n");
 
+  // setup channels
+  unsigned num_channels=0;
+  song_.channels.reserve(32);
+  for(unsigned i=0; i<32; ++i)
+  {
+    uint8 cset=chl_settings[i];
+    if(cset!=255)
+    {
+      cset&=0x7f;
+      pmf_channel &chl=song_.channels.push_back();
+      chl.panning=cset<8?-127:cset<16?127:0;
+      ++num_channels;
+    }
+  }
+
   // setup song
   song_.name=song_name;
-  unsigned num_channels=0;
-  for(unsigned i=0; i<32; ++i)
-    if(chl_settings[i]!=255)
-      ++num_channels;
-  song_.num_channels=num_channels;
   song_.flags=0;
   song_.initial_speed=init_speed?init_speed:6;
   song_.initial_tempo=init_tempo<32?125:init_tempo;
@@ -97,7 +107,7 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
   }
   num_orders=uint16(orders.size());
 
-  // read instrument and pattern para-pointers and default pan positions
+  // read sample and pattern para-pointers and default pan positions
   array<uint16> inst_pptrs(num_inst);
   array<uint16> pat_pptrs(num_patterns);
   uint8 def_ppos[32]={0};
@@ -109,12 +119,11 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
   for(unsigned i=0; i<num_orders; ++i)
     song_.playlist[i]=orders[i];
 
-  // read instruments
-  song_.instruments.resize(num_inst);
+  // read samples
   song_.samples.resize(num_inst);
   for(unsigned ii=0; ii<num_inst; ++ii)
   {
-    // read instrument parameters
+    // read sample parameters
     unsigned file_offset=inst_pptrs[ii]*16;
     in_file_.seek(file_offset);
     uint32 length, loop_begin, loop_end, data_offset=0;
@@ -130,10 +139,10 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
     in_file_>>packed>>flags>>c2spd;
     bool has_loop=(flags&1)!=0;
 
-    // setup instrument and read instrument data
+    // setup sample and read sample data
     if(type)
     {
-      // check instrument type
+      // check sample type
       if(type!=1)
       {
         warnf("Warning: S3M loader doesn't support Adlib instruments - Skipping instrument #%i\r\n", ii);
@@ -155,12 +164,10 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
         continue;
       }
 
-      // set instrument data
+      // set sample data
       if(length)
-        ++song_.num_valid_instruments;
+        ++song_.num_valid_samples;
       song_.total_src_sample_data_bytes+=length;
-      pmf_instrument &pmf_inst=song_.instruments[ii];
-      pmf_inst.sample_idx=ii;
       pmf_sample &pmf_smp=song_.samples[ii];
       pmf_smp.length=length;
       pmf_smp.loop_start=has_loop?uint16(loop_begin):0;
@@ -179,7 +186,6 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
       }
     }
   }
-  song_.num_valid_samples=song_.num_valid_instruments;
 
   // read patterns
   pmf_pattern_track_row dummy_track_row;

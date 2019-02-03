@@ -113,16 +113,19 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
     default: return pmferr_unknown_format;
   }
 
+  // setup channels
+  song_.channels.resize(num_channels);
+  for(unsigned i=0; i<num_channels; ++i)
+    song_.channels[i].panning=i&1?127:-127;
+
   // setup song
   char song_name[21]={0};
   in_file_.read_bytes(song_name, 20);
   song_.name=song_name;
-  song_.num_channels=num_channels;
   song_.note_period_min=56; // ProTracker limits
   song_.note_period_max=1712;
 
   // read sample infos
-  song_.instruments.resize(max_samples);
   song_.samples.resize(max_samples);
   for(unsigned si=0; si<max_samples; ++si)
   {
@@ -130,8 +133,6 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
     uint16 len;
     in_file_>>len;
     len=swap_bytes(len)*2;
-    pmf_instrument &pmf_inst=song_.instruments[si];
-    pmf_inst.sample_idx=si;
     pmf_sample &pmf_smp=song_.samples[si];
     pmf_smp.length=len;
     song_.total_src_sample_data_bytes+=len;
@@ -151,7 +152,6 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
     else
       in_file_.skip(6);
   }
-  song_.num_valid_instruments=song_.num_valid_samples;
 
   // read pattern playlist
   uint8 playlist_len, restart_pos;
