@@ -1,5 +1,5 @@
 //============================================================================
-// PMF Player v0.5
+// PMF Player
 //
 // Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
@@ -39,8 +39,12 @@
 #include <Arduino.h>
 
 // new
+struct pmf_channel_info;
+struct pmf_mixer_buffer;
 class pmf_player;
+template<typename T, unsigned buffer_size> struct pmf_audio_buffer;
 typedef void(*pmf_row_callback_t)(void *custom_data_, uint8_t channel_idx_, uint8_t &note_idx_, uint8_t &inst_idx_, uint8_t &volume_, uint8_t &effect_, uint8_t &effect_data_);
+typedef void(*pmf_tick_callback_t)(void *custom_data_);
 //---------------------------------------------------------------------------
 
 
@@ -48,9 +52,8 @@ typedef void(*pmf_row_callback_t)(void *custom_data_, uint8_t channel_idx_, uint
 // PMF player config
 //===========================================================================
 #define PMF_AUDIO_LEVEL 2
-#define PMF_LINEAR_INTERPOLATION         // interpolate samples linearly for better sound quality (more MCU intensive)
+//#define PMF_LINEAR_INTERPOLATION         // interpolate samples linearly for better sound quality (more MCU intensive)
 //#define PMF_SERIAL_LOGS                  // enable logging to serial output (disable to save memory)
-enum {pmfplayer_sampling_rate=22050};    // playback frequency in Hz (increase for better quality, reduce for less MCU perf hit)
 enum {pmfplayer_max_channels=16};        // maximum number of audio playback channels (reduce to save memory)
 //---------------------------------------------------------------------------
 
@@ -78,6 +81,8 @@ enum e_pmf_effect
   pmffx_set_sample_offset, // [xxxxxxxx], offset=x*256
   pmffx_subfx,             // [xxxxyyyy], x=sub-effect, y=sub-effect value
 };
+//----
+
 enum e_pmf_subfx
 {
   pmfsubfx_set_glissando,    // 0=off, 1=on (when enabled "note slide" slides half a not at a time)
@@ -101,6 +106,18 @@ struct pmf_channel_info
   uint8_t volume;
   uint8_t effect;
   uint8_t effect_data;
+  uint8_t note_hit;
+};
+//---------------------------------------------------------------------------
+
+
+//===========================================================================
+// pmf_mixer_buffer
+//===========================================================================
+struct pmf_mixer_buffer
+{
+  void *begin;
+  unsigned num_samples;
 };
 //---------------------------------------------------------------------------
 
@@ -117,6 +134,7 @@ public:
   void load(const void *pmem_pmf_file_);
   void enable_playback_channels(uint8_t num_channels_);
   void set_row_callback(pmf_row_callback_t, void *custom_data_=0);
+  void set_tick_callback(pmf_tick_callback_t, void *custom_data_=0);
   //-------------------------------------------------------------------------
 
   // PMF accessors
@@ -126,7 +144,7 @@ public:
   //-------------------------------------------------------------------------
 
   // player control
-  void start(uint16_t playlist_pos_=0);
+  void start(uint32_t sampling_freq_=22050, uint16_t playlist_pos_=0);
   void stop();
   void update();
   //-------------------------------------------------------------------------
@@ -140,15 +158,16 @@ public:
   //-------------------------------------------------------------------------
 
 private:
-  struct mixer_buffer;
   struct envelope_state;
   struct audio_channel;
   // platform specific functions (implemented in platform specific files)
-  void start_playback();
+  uint32_t get_sampling_freq(uint32_t sampling_freq_);
+  void start_playback(uint32_t sampling_freq_);
   void stop_playback();
-  void mix_buffer(mixer_buffer&, unsigned num_samples_);
-  mixer_buffer get_mixer_buffer();
-  void visualize_pattern_frame();
+  void mix_buffer(pmf_mixer_buffer&, unsigned num_samples_);
+  pmf_mixer_buffer get_mixer_buffer();
+  // platform agnostic reference functions
+  void mix_buffer_impl(pmf_mixer_buffer&, unsigned num_samples_);
   // audio effects
   void apply_channel_effect_volume_slide(audio_channel&);
   void apply_channel_effect_note_slide(audio_channel&);
@@ -160,21 +179,13 @@ private:
   void evaluate_envelope(envelope_state&, uint16_t env_data_offs_, bool is_note_off_);
   void evaluate_envelopes();
   // pattern playback
+  uint16_t get_note_period(uint8_t note_idx_, int16_t finetune_);
+  int16_t get_sample_speed(uint16_t note_period_, bool forward_);
   void set_instrument(audio_channel&, uint8_t inst_idx_, uint8_t note_idx_);
   void hit_note(audio_channel&, uint8_t note_idx_, uint8_t sample_start_pos_, bool reset_sample_pos_);
   void process_pattern_row();
   void process_track_row(audio_channel&, uint8_t &note_idx_, uint8_t &inst_idx_, uint8_t &volume_, uint8_t &effect_, uint8_t &effect_data_);
   void init_pattern(uint8_t playlist_pos_, uint8_t row_=0);
-  //-------------------------------------------------------------------------
-
-  //=========================================================================
-  // mixer_buffer
-  //=========================================================================
-  struct mixer_buffer
-  {
-    void *begin;
-    unsigned num_samples;
-  };
   //-------------------------------------------------------------------------
 
   //=========================================================================
@@ -235,9 +246,12 @@ private:
 
   // PMF info
   const uint8_t *m_pmf_file;
+  uint32_t m_sampling_freq;
   pmf_row_callback_t m_row_callback;
   void *m_row_callback_custom_data;
-  uint16_t m_flags;  // e_pmf_flags
+  pmf_tick_callback_t m_tick_callback;
+  void *m_tick_callback_custom_data;
+  uint16_t m_pmf_flags;  // e_pmf_flags
   uint16_t m_note_period_min;
   uint16_t m_note_period_max;
   uint8_t m_note_slide_speed;
@@ -262,6 +276,78 @@ private:
   uint8_t m_pattern_loop_cnt;
   uint8_t m_pattern_loop_row_idx;
 };
+//---------------------------------------------------------------------------
+
+
+//===========================================================================
+// pmf_audio_buffer
+//===========================================================================
+template<typename T, unsigned buffer_size>
+struct pmf_audio_buffer
+{
+  // construction & accessors
+  pmf_audio_buffer();
+  void reset();
+  template<typename U, unsigned sample_bits> U read_sample();
+  pmf_mixer_buffer get_mixer_buffer();
+  //-------------------------------------------------------------------------
+
+  enum {subbuffer_size=buffer_size/2};
+  volatile uint16_t playback_pos;
+  uint8_t subbuf_write_idx;
+  T buffer[buffer_size];
+};
+//---------------------------------------------------------------------------
+
+template<typename T, unsigned buffer_size>
+pmf_audio_buffer<T, buffer_size>::pmf_audio_buffer()
+{
+  reset();
+}
+//----
+
+template<typename T, unsigned buffer_size>
+void pmf_audio_buffer<T, buffer_size>::reset()
+{
+  playback_pos=0;
+  subbuf_write_idx=1;
+  memset(buffer, 0, sizeof(buffer));
+}
+//----
+
+template<typename T, unsigned buffer_size>
+template<typename U, unsigned sample_bits>
+U pmf_audio_buffer<T, buffer_size>::read_sample()
+{
+  // read sample from the buffer and clip to given number of bits
+  enum {sample_range=1<<sample_bits};
+  enum {max_sample_val=sample_range-1};
+  uint16_t pbpos=playback_pos;
+  T *smp_addr=buffer+pbpos;
+  U smp=U(*smp_addr+(sample_range>>(1+PMF_AUDIO_LEVEL)));
+  *smp_addr=0;
+  if(smp>(sample_range>>PMF_AUDIO_LEVEL)-1)
+    smp=smp>((U(-1)>>1)+(sample_range>>(1+PMF_AUDIO_LEVEL)))?0:max_sample_val;
+  if(++pbpos==buffer_size)
+    pbpos=0;
+  playback_pos=pbpos;
+  return smp<<PMF_AUDIO_LEVEL;
+}
+//----
+
+template<typename T, unsigned buffer_size>
+pmf_mixer_buffer pmf_audio_buffer<T, buffer_size>::get_mixer_buffer()
+{
+  // return buffer for mixing if available (i.e. not playing the one for writing)
+  uint16_t pbpos=playback_pos; // note: atomic read thus no need to disable interrupts
+  pmf_mixer_buffer buf={0, 0};
+  if(subbuf_write_idx^(pbpos<subbuffer_size))
+    return buf;
+  buf.begin=buffer+subbuf_write_idx*subbuffer_size;
+  buf.num_samples=subbuffer_size;
+  subbuf_write_idx^=1;
+  return buf;
+}
 //---------------------------------------------------------------------------
 
 //============================================================================

@@ -1,5 +1,5 @@
 //============================================================================
-// PMF Player v0.5
+// PMF Player
 //
 // Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
@@ -152,18 +152,9 @@ static const int8_t PROGMEM s_waveforms[3][32]=
 };
 // logging
 #ifdef PMF_SERIAL_LOGS
-void logf(const char *fs_, ...)
-{
-  char buf[64];
-  va_list args;
-  va_start(args, fs_);
-  sprintf(buf, fs_, args);
-  va_end(args);
-  Serial.print(buf);
-}
-#define PMF_SERIAL_LOG(x__) logf x__
+#define PMF_SERIAL_LOG(...) {char buf[64]; sprintf(buf, __VA_ARGS__); Serial.print(buf);}
 #else
-#define PMF_SERIAL_LOG(x__)
+#define PMF_SERIAL_LOG(...)
 #endif
 //---------------------------------------------------------------------------
 
@@ -187,12 +178,13 @@ namespace
   uint8_t read_bits(const uint8_t *&ptr_, uint8_t &bit_pos_, uint8_t num_bits_)
   {
     // read bits from the bit stream
-    uint8_t v=pgm_read_word(ptr_)>>bit_pos_;
+    uint8_t v=pgm_read_byte(ptr_)>>bit_pos_;
     bit_pos_+=num_bits_;
     if(bit_pos_>7)
     {
       ++ptr_;
-      bit_pos_-=8;
+      if(bit_pos_-=8)
+        v|=pgm_read_byte(ptr_)<<(num_bits_-bit_pos_);
     }
     return v;
   }
@@ -222,31 +214,6 @@ namespace
       res*=1.4142135623730950488f;
     return res;
   }
-  //-------------------------------------------------------------------------
-
-  //=========================================================================
-  // get_note_period
-  //=========================================================================
-  uint16_t get_note_period(uint8_t note_idx_, int16_t finetune_, uint8_t flags_)
-  {
-    if(flags_&pmfflag_linear_freq_table)
-      return 7680-note_idx_*64-finetune_/2;
-    return uint16_t(27392.0f/exp2((note_idx_*128+finetune_)/(12.0f*128.0f))+0.5f);
-  }
-  //-------------------------------------------------------------------------
-
-  //=========================================================================
-  // get_sample_speed
-  //=========================================================================
-  int16_t get_sample_speed(uint16_t note_period_, uint8_t pmf_flags_, bool forward_)
-  {
-    int16_t speed;
-    if(pmf_flags_&pmfflag_linear_freq_table)
-      speed=int16_t((8363.0f*8.0f/pmfplayer_sampling_rate)*exp2(float(7680-note_period_)/768.0f)+0.5f);
-    else
-      speed=int16_t((7093789.2f*256.0f/pmfplayer_sampling_rate)/note_period_+0.5f);
-    return forward_?speed:-speed;
-  }
 } // namespace <anonymous>
 //---------------------------------------------------------------------------
 
@@ -257,7 +224,9 @@ namespace
 pmf_player::pmf_player()
 {
   m_pmf_file=0;
+  m_sampling_freq=0;
   m_row_callback=0;
+  m_tick_callback=0;
   m_speed=0;
 }
 //----
@@ -274,12 +243,12 @@ void pmf_player::load(const void *pmem_pmf_file_)
   const uint8_t *pmf_file=static_cast<const uint8_t*>(pmem_pmf_file_);
   if(pgm_read_dword(pmf_file+pmfcfg_offset_signature)!=0x78666d70)
   {
-    PMF_SERIAL_LOG(("Error: Invalid PMF file. Please use pmf_converter to generate the file.\r\n"));
+    PMF_SERIAL_LOG("Error: Invalid PMF file. Please use pmf_converter to generate the file.\r\n");
     return;
   }
   if((pgm_read_word(pmf_file+pmfcfg_offset_version)&0xfff0)!=pmf_file_version)
   {
-    PMF_SERIAL_LOG(("Error: PMF file version mismatch. Please use matching pmf_converter to generate the file.\r\n"));
+    PMF_SERIAL_LOG("Error: PMF file version mismatch. Please use matching pmf_converter to generate the file.\r\n");
     return;
   }
 
@@ -289,9 +258,9 @@ void pmf_player::load(const void *pmem_pmf_file_)
   m_num_instruments=pgm_read_byte(m_pmf_file+pmfcfg_offset_num_instruments);
   m_num_samples=pgm_read_byte(m_pmf_file+pmfcfg_offset_num_samples);
   enable_playback_channels(m_num_pattern_channels);
-  m_flags=pgm_read_word(m_pmf_file+pmfcfg_offset_flags);
-  m_note_slide_speed=m_flags&pmfflag_linear_freq_table?4:2;
-  PMF_SERIAL_LOG(("PMF file loaded (%i channels)\r\n", m_num_pattern_channels));
+  m_pmf_flags=pgm_read_word(m_pmf_file+pmfcfg_offset_flags);
+  m_note_slide_speed=m_pmf_flags&pmfflag_linear_freq_table?4:2;
+  PMF_SERIAL_LOG("PMF file loaded (%i channels)\r\n", m_num_pattern_channels);
 }
 //----
 
@@ -306,6 +275,13 @@ void pmf_player::set_row_callback(pmf_row_callback_t callback_, void *custom_dat
 {
   m_row_callback=callback_;
   m_row_callback_custom_data=custom_data_;
+}
+//----
+
+void pmf_player::set_tick_callback(pmf_tick_callback_t callback_, void *custom_data_)
+{
+  m_tick_callback=callback_;
+  m_tick_callback_custom_data=custom_data_;
 }
 //---------------------------------------------------------------------------
 
@@ -327,7 +303,7 @@ uint16_t pmf_player::playlist_length() const
 }
 //---------------------------------------------------------------------------
 
-void pmf_player::start(uint16_t playlist_pos_)
+void pmf_player::start(uint32_t sampling_freq_, uint16_t playlist_pos_)
 {
   // initialize channels
   if(!m_pmf_file)
@@ -342,20 +318,21 @@ void pmf_player::start(uint16_t playlist_pos_)
   }
 
   // init playback state
+  m_sampling_freq=get_sampling_freq(sampling_freq_);
   m_num_processed_pattern_channels=min(m_num_pattern_channels, m_num_playback_channels);
   init_pattern(playlist_pos_<pgm_read_word(m_pmf_file+pmfcfg_offset_playlist_length)?playlist_pos_:0);
   m_speed=pgm_read_byte(m_pmf_file+pmfcfg_offset_init_speed);
   m_note_period_min=pgm_read_word(m_pmf_file+pmfcfg_offset_note_period_min);
   m_note_period_max=pgm_read_word(m_pmf_file+pmfcfg_offset_note_period_max);
-  m_num_batch_samples=(long(pmfplayer_sampling_rate)*125)/long(pgm_read_byte(m_pmf_file+pmfcfg_offset_init_tempo)*50);
+  m_num_batch_samples=(m_sampling_freq*125)/long(pgm_read_byte(m_pmf_file+pmfcfg_offset_init_tempo)*50);
   m_current_row_tick=m_speed-1;
   m_arpeggio_counter=0;
   m_pattern_delay=1;
 
   // start playback
   m_batch_pos=0;
-  start_playback();
-  PMF_SERIAL_LOG(("PMF playback started (%i channels)\r\n", m_num_playback_channels));
+  start_playback(sampling_freq_);
+  PMF_SERIAL_LOG("PMF playback started (%i channels)\r\n", m_num_playback_channels);
 }
 //----
 
@@ -372,7 +349,7 @@ void pmf_player::update()
   // check if audio buffer should be updated
   if(!m_note_slide_speed)
     return;
-  mixer_buffer subbuffer=get_mixer_buffer();
+  pmf_mixer_buffer subbuffer=get_mixer_buffer();
   if(!subbuffer.num_samples)
     return;
 
@@ -401,7 +378,8 @@ void pmf_player::update()
         apply_channel_effects();
       if(m_num_instruments)
         evaluate_envelopes();
-      visualize_pattern_frame();
+      if(m_tick_callback)
+        (*m_tick_callback)(m_tick_callback_custom_data);
       m_batch_pos=0;
     }
   } while(subbuffer.num_samples);
@@ -443,6 +421,7 @@ pmf_channel_info pmf_player::channel_info(uint8_t channel_idx_) const
     info.volume=chl.sample_volume;
     info.effect=chl.effect;
     info.effect_data=chl.effect_data;
+    info.note_hit=chl.note_hit;
   }
   else
   {
@@ -451,8 +430,77 @@ pmf_channel_info pmf_player::channel_info(uint8_t channel_idx_) const
     info.volume=0;
     info.effect=0xff;
     info.effect_data=0;
+    info.note_hit=0;
   }
   return info;
+}
+//---------------------------------------------------------------------------
+
+void pmf_player::mix_buffer_impl(pmf_mixer_buffer &buf_, unsigned num_samples_)
+{
+  audio_channel *channel=m_channels, *channel_end=channel+m_num_playback_channels;
+  do
+  {
+    // check for active channel
+    if(!channel->sample_speed)
+      continue;
+
+    // get channel attributes
+    size_t sample_addr=(size_t)(m_pmf_file+pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_data));
+    uint32_t sample_pos=channel->sample_pos;
+    int16_t sample_speed=channel->sample_speed;
+    uint32_t sample_end=uint32_t(pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_length))<<8;
+    uint32_t sample_loop_len=pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_loop_length)<<8;
+    uint8_t sample_volume=(channel->sample_volume*(channel->vol_env.value>>8))>>8;
+    uint32_t sample_pos_offs=sample_end-sample_loop_len;
+    if(sample_pos<sample_pos_offs)
+      sample_pos_offs=0;
+    sample_addr+=sample_pos_offs>>8;
+    sample_pos-=sample_pos_offs;
+    sample_end-=sample_pos_offs;
+
+    // mix channel to the buffer
+    int16_t *buf=(int16_t*)buf_.begin, *buffer_end=buf+num_samples_;
+    do
+    {
+      // add channel sample to buffer
+#ifdef PMF_LINEAR_INTERPOLATION
+      uint16_t smp=((uint16_t)pgm_read_word(sample_addr+(sample_pos>>8)));
+      uint8_t sample_pos_frc=sample_pos&255;
+      int16_t interp_smp=((int16_t(int8_t(smp&255))*(256-sample_pos_frc))>>8)+((int16_t(int8_t(smp>>8))*sample_pos_frc)>>8);
+      *buf+=int16_t(sample_volume*interp_smp)>>8;
+#else
+      int8_t smp=(int8_t)pgm_read_byte(sample_addr+(sample_pos>>8));
+      *buf+=int16_t(sample_volume*int16_t(smp))>>8;
+#endif
+
+      // advance sample position
+      sample_pos+=sample_speed;
+      if(sample_pos>=sample_end)
+      {
+        // check for loop
+        if(!sample_loop_len)
+        {
+          channel->sample_speed=0;
+          break;
+        }
+
+        // apply normal/bidi loop
+        if(pgm_read_byte(channel->smp_metadata+pmfcfg_offset_smp_flags)&pmfsmpflag_bidi_loop)
+        {
+          sample_pos-=sample_speed*2;
+          channel->sample_speed=sample_speed=-sample_speed;
+        }
+        else
+          sample_pos-=sample_loop_len;
+      }
+    } while(++buf<buffer_end);
+    channel->sample_pos=sample_pos+sample_pos_offs;
+  } while(++channel!=channel_end);
+
+  // advance buffer
+  ((int16_t*&)buf_.begin)+=num_samples_;
+  buf_.num_samples-=num_samples_;
 }
 //---------------------------------------------------------------------------
 
@@ -476,7 +524,7 @@ void pmf_player::apply_channel_effect_note_slide(audio_channel &chl_)
   note_period+=slide_spd;
   note_period=((slide_spd>0)^(note_period<note_target_prd))?note_target_prd:note_period;
   chl_.note_period=note_period;
-  chl_.sample_speed=note_period<m_note_period_min || note_period>m_note_period_max?0:get_sample_speed(chl_.note_period, m_flags, chl_.sample_speed>=0);
+  chl_.sample_speed=note_period<m_note_period_min || note_period>m_note_period_max?0:get_sample_speed(chl_.note_period, chl_.sample_speed>=0);
 }
 //----
 
@@ -487,7 +535,7 @@ void pmf_player::apply_channel_effect_vibrato(audio_channel &chl_)
   uint8_t wave_idx=chl_.fxmem_vibrato_wave&3;
   int8_t vibrato_pos=chl_.fxmem_vibrato_pos;
   int8_t wave_sample=vibrato_pos<0?-int8_t(pgm_read_byte(&s_waveforms[wave_idx][~vibrato_pos])):pgm_read_byte(&s_waveforms[wave_idx][vibrato_pos]);
-  chl_.sample_speed=get_sample_speed(chl_.note_period+(int16_t(wave_sample*chl_.fxmem_vibrato_depth)>>8), m_flags, chl_.sample_speed>=0);
+  chl_.sample_speed=get_sample_speed(chl_.note_period+(int16_t(wave_sample*chl_.fxmem_vibrato_depth)>>8), chl_.sample_speed>=0);
   if((chl_.fxmem_vibrato_pos+=chl_.fxmem_vibrato_spd)>31)
     chl_.fxmem_vibrato_pos-=64;
 }
@@ -501,6 +549,7 @@ void pmf_player::apply_channel_effects()
   {
     // apply active volume effect
     audio_channel &chl=m_channels[ci];
+    chl.note_hit=0;
     switch(chl.vol_effect)
     {
       case pmfvolfx_volume_slide: apply_channel_effect_volume_slide(chl); break;
@@ -517,8 +566,8 @@ void pmf_player::apply_channel_effects()
         if(!chl.sample_speed)
           break;
         uint8_t base_note_idx=chl.base_note_idx&127;
-        uint16_t note_period=get_note_period(base_note_idx+((chl.fxmem_arpeggio>>(4*m_arpeggio_counter))&0xf), chl.sample_finetune, m_flags);
-        chl.sample_speed=get_sample_speed(note_period, m_flags, chl.sample_speed>=0);
+        uint16_t note_period=get_note_period(base_note_idx+((chl.fxmem_arpeggio>>(4*m_arpeggio_counter))&0xf), chl.sample_finetune);
+        chl.sample_speed=get_sample_speed(note_period, chl.sample_speed>=0);
       } break;
 
       case pmffx_note_slide: apply_channel_effect_note_slide(chl); break;
@@ -707,9 +756,9 @@ void pmf_player::evaluate_envelopes()
     uint16_t vol_env_offset=pgm_read_word(chl.inst_metadata+pmfcfg_offset_inst_vol_env);
     if(vol_env_offset!=0xffff)
       evaluate_envelope(chl.vol_env, vol_env_offset, is_note_off);
-    uint16_t pitch_env_offset=pgm_read_word(chl.inst_metadata+pmfcfg_offset_inst_pitch_env);
+/*    uint16_t pitch_env_offset=pgm_read_word(chl.inst_metadata+pmfcfg_offset_inst_pitch_env);
     if(pitch_env_offset!=0xffff)
-      evaluate_envelope(chl.pitch_env, pitch_env_offset, is_note_off);
+      evaluate_envelope(chl.pitch_env, pitch_env_offset, is_note_off);*/
 
     if(is_note_off)
     {
@@ -721,6 +770,25 @@ void pmf_player::evaluate_envelopes()
   }
 }
 //----------------------------------------------------------------------------
+
+uint16_t pmf_player::get_note_period(uint8_t note_idx_, int16_t finetune_)
+{
+  if(m_pmf_flags&pmfflag_linear_freq_table)
+    return 7680-note_idx_*64-finetune_/2;
+  return uint16_t(27392.0f/exp2((note_idx_*128+finetune_)/(12.0f*128.0f))+0.5f);
+}
+//----
+
+int16_t pmf_player::get_sample_speed(uint16_t note_period_, bool forward_)
+{
+  int16_t speed;
+  if(m_pmf_flags&pmfflag_linear_freq_table)
+    speed=int16_t((8363.0f*8.0f/m_sampling_freq)*exp2(float(7680-note_period_)/768.0f)+0.5f);
+  else
+    speed=int16_t((7093789.2f*256.0f/m_sampling_freq)/note_period_+0.5f);
+  return forward_?speed:-speed;
+}
+//----
 
 void pmf_player::set_instrument(audio_channel &chl_, uint8_t inst_idx_, uint8_t note_idx_)
 {
@@ -771,7 +839,7 @@ void pmf_player::set_instrument(audio_channel &chl_, uint8_t inst_idx_, uint8_t 
   {
     chl_.sample_pos=0;
     if(chl_.sample_speed)
-      chl_.sample_speed=get_sample_speed(chl_.note_period, m_flags, true);
+      chl_.sample_speed=get_sample_speed(chl_.note_period, true);
   }
   chl_.smp_metadata=smp_metadata;
   chl_.sample_volume=(uint16_t(inst_vol)*uint16_t(pgm_read_byte(chl_.smp_metadata+pmfcfg_offset_smp_volume)))>>8;
@@ -783,12 +851,12 @@ void pmf_player::hit_note(audio_channel &chl_, uint8_t note_idx_, uint8_t sample
 {
   if(!chl_.smp_metadata)
     return;
-  chl_.note_period=get_note_period(note_idx_, chl_.sample_finetune, m_flags);
+  chl_.note_period=get_note_period(note_idx_, chl_.sample_finetune);
   chl_.base_note_idx=note_idx_;
   if(reset_sample_pos_)
     chl_.sample_pos=sample_start_pos_*65536;
-  chl_.sample_speed=get_sample_speed(chl_.note_period, m_flags, true);
-  chl_.note_hit=1;
+  chl_.sample_speed=get_sample_speed(chl_.note_period, true);
+  chl_.note_hit=reset_sample_pos_;
   if(!(chl_.fxmem_vibrato_wave&0x4))
     chl_.fxmem_vibrato_pos=0;
 }
@@ -804,6 +872,7 @@ void pmf_player::process_pattern_row()
     audio_channel &chl=m_channels[ci];
     current_track_poss[ci]=chl.track_pos;
     current_track_bit_poss[ci]=chl.track_bit_pos;
+    chl.note_hit=0;
   }
 
   // parse row in the music pattern
@@ -921,7 +990,7 @@ void pmf_player::process_pattern_row()
           case 0xa0:
           {
             // init note slide and disable note retrigger
-            if(init_effect_note_slide(chl, volfx_data, note_idx!=0xff?get_note_period(note_idx, chl.sample_finetune, m_flags):0))
+            if(init_effect_note_slide(chl, volfx_data, note_idx!=0xff?get_note_period(note_idx, chl.sample_finetune):0))
               chl.vol_effect=pmfvolfx_note_slide;
             note_idx=0xff;
           } break;
@@ -956,7 +1025,7 @@ void pmf_player::process_pattern_row()
           if(effect_data<32)
             m_speed=effect_data;
           else
-            m_num_batch_samples=(long(pmfplayer_sampling_rate)*125)/long(effect_data*50);
+            m_num_batch_samples=(m_sampling_freq*125)/long(effect_data*50);
         } break;
 
         case pmffx_position_jump:
@@ -992,7 +1061,7 @@ void pmf_player::process_pattern_row()
         case pmffx_note_slide:
         {
           // init note slide and disable retrigger
-          if(init_effect_note_slide(chl, effect_data, note_idx!=0xff?get_note_period(note_idx, chl.sample_finetune, m_flags):0))
+          if(init_effect_note_slide(chl, effect_data, note_idx!=0xff?get_note_period(note_idx, chl.sample_finetune):0))
             chl.effect=pmffx_note_slide;
           note_idx=0xff;
         } break;
@@ -1019,7 +1088,7 @@ void pmf_player::process_pattern_row()
 
         case pmffx_note_vol_slide:
         {
-          init_effect_note_slide(chl, 0, note_idx!=0xff?get_note_period(note_idx, chl.sample_finetune, m_flags):0);
+          init_effect_note_slide(chl, 0, note_idx!=0xff?get_note_period(note_idx, chl.sample_finetune):0);
           init_effect_volume_slide(chl, effect_data);
           chl.effect=pmffx_note_vol_slide;
           note_idx=0xff;
@@ -1131,7 +1200,7 @@ void pmf_player::process_pattern_row()
     if(note_idx!=0xff)
       hit_note(chl, note_idx, sample_start_pos, reset_sample_pos);
     else if(update_sample_speed && chl.sample_speed)
-      chl.sample_speed=get_sample_speed(chl.note_period, m_flags, chl.sample_speed>=0);
+      chl.sample_speed=get_sample_speed(chl.note_period, chl.sample_speed>=0);
   }
 
   // check for pattern loop

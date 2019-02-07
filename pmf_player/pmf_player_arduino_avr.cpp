@@ -1,5 +1,5 @@
 //============================================================================
-// PMF Player v0.5
+// PMF Player
 //
 // Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
@@ -28,7 +28,7 @@
 //============================================================================
 
 #include "pmf_player.h"
-#if defined(__AVR_ATmega328P__)
+#if defined(ARDUINO_ARCH_AVR)
 #include "pmf_data.h"
 //---------------------------------------------------------------------------
 
@@ -36,6 +36,7 @@
 //===========================================================================
 // audio buffer
 //===========================================================================
+/*todo: change to pmf_audio_buffer*/
 enum {pmfplayer_audio_buffer_size=400};  // number of 16-bit samples in the buffer
 enum {audio_subbuffer_size=pmfplayer_audio_buffer_size/2};
 static int16_t s_buffer[pmfplayer_audio_buffer_size];
@@ -106,7 +107,13 @@ ISR(TIMER1_COMPA_vect)
 }
 //----
 
-void pmf_player::start_playback()
+uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_)
+{
+  return sampling_freq_;
+}
+//----
+
+void pmf_player::start_playback(uint32_t sampling_freq_)
 {
   // setup pins
   DDRD=0xff;
@@ -124,7 +131,7 @@ void pmf_player::start_playback()
   TCCR1B=_BV(CS10)|_BV(WGM12); // CTC mode 4 (OCR1A)
   TCCR1C=0;
   TIMSK1=_BV(OCIE1A);          // enable timer 1 counter A
-  OCR1A=(16000000+pmfplayer_sampling_rate/2)/pmfplayer_sampling_rate;
+  OCR1A=(16000000+sampling_freq_/2)/sampling_freq_;
 }
 //----
 
@@ -239,27 +246,7 @@ pmf_player::mixer_buffer pmf_player::get_mixer_buffer()
   s_subbuffer_write_idx^=1;
   return buf;
 }
-//----
-
-void pmf_player::visualize_pattern_frame()
-{
-  // get LED states
-  uint16_t led_bits=0;
-  for(unsigned ci=0; ci<m_num_playback_channels; ++ci)
-  {
-    audio_channel &chl=m_channels[ci];
-    if(chl.note_hit)
-    {
-      led_bits|=1<<ci;
-      chl.note_hit=0;
-    }
-  }
-
-  // set LEDs
-  PORTB=led_bits;
-  PORTC=led_bits>>6;
-}
 //---------------------------------------------------------------------------
 
 //===========================================================================
-#endif // __AVR_ATmega328P__
+#endif // ARDUINO_ARCH_AVR

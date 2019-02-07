@@ -1,5 +1,5 @@
 //============================================================================
-// PMF Player v0.5
+// PMF Player
 //
 // Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
@@ -36,11 +36,7 @@
 //===========================================================================
 // audio buffer
 //===========================================================================
-enum {pmfplayer_audio_buffer_size=400};  // number of 16-bit samples in the buffer
-enum {audio_subbuffer_size=pmfplayer_audio_buffer_size/2};
-static int16_t s_buffer[pmfplayer_audio_buffer_size];
-static int16_t *volatile s_buffer_playback_pos;
-static uint8_t s_subbuffer_write_idx=0;
+static pmf_audio_buffer<int16_t, 2048> s_audio_buffer;
 //---------------------------------------------------------------------------
 
 
@@ -52,31 +48,26 @@ static IntervalTimer s_int_timer;
 
 void playback_interrupt()
 {
-  int16_t *smp_addr=s_buffer_playback_pos;
-  uint16_t smp=(*smp_addr+(2048>>PMF_AUDIO_LEVEL));
-  *smp_addr=0;
-  if(smp>=(4096>>PMF_AUDIO_LEVEL))
-    smp=smp>uint16_t(32767+(2048>>PMF_AUDIO_LEVEL))?0:(4096>>PMF_AUDIO_LEVEL)-1;
-  analogWriteDAC0(smp<<PMF_AUDIO_LEVEL);
-  if(++s_buffer_playback_pos==s_buffer+pmfplayer_audio_buffer_size)
-    s_buffer_playback_pos=s_buffer;
+  uint16_t smp=s_audio_buffer.read_sample<uint16_t, 12>();
+  analogWriteDAC0(smp);
 }
 //----
 
-void pmf_player::start_playback()
+uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_)
 {
-  // setup pins
-  DDRB=0x3f;
-  DDRC=0x3f;
+  // round to the closest frequency representable by the bus
+  float us=1000000.0f/sampling_freq_;
+  uint32_t cycles=us*(F_BUS/1000000)-0.5f;
+  float freq=1000000.0f*(F_BUS/1000000)/float(cycles);
+  return uint32_t(freq+0.5f);
+}
+//----
 
-  // clear audio buffer
-  for(unsigned i=0; i<pmfplayer_audio_buffer_size; ++i)
-    s_buffer[i]=0;
-  s_buffer_playback_pos=s_buffer;
-  s_subbuffer_write_idx=1;
-
-  // enable playback interrupt at given playback frequency
-  s_int_timer.begin(playback_interrupt, 1000000.0f/pmfplayer_sampling_rate);
+void pmf_player::start_playback(uint32_t sampling_freq_)
+{
+  // enable playback interrupt at given frequency
+  s_audio_buffer.reset();
+  s_int_timer.begin(playback_interrupt, 1000000.0f/sampling_freq_);
 }
 //----
 
@@ -86,108 +77,15 @@ void pmf_player::stop_playback()
 }
 //----
 
-void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
+void pmf_player::mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
 {
-  audio_channel *channel=m_channels, *channel_end=channel+m_num_playback_channels;
-  do
-  {
-    // check for active channel
-//    if(channel!=m_channels+4) continue;/**/
-    if(!channel->sample_speed)
-      continue;
-
-    // get channel attributes
-    size_t sample_addr=(size_t)(m_pmf_file+pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_data));
-    uint32_t sample_pos=channel->sample_pos;
-    int16_t sample_speed=channel->sample_speed;
-    uint32_t sample_end=uint32_t(pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_length))<<8;
-    uint32_t sample_loop_len=pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_loop_length)<<8;
-    uint8_t sample_volume=(channel->sample_volume*(channel->vol_env.value>>8))>>8;
-    uint32_t sample_pos_offs=sample_end-sample_loop_len;
-    if(sample_pos<sample_pos_offs)
-      sample_pos_offs=0;
-    sample_addr+=sample_pos_offs>>8;
-    sample_pos-=sample_pos_offs;
-    sample_end-=sample_pos_offs;
-
-    // mix channel to the buffer
-    int16_t *buf=(int16_t*)buf_.begin, *buffer_end=buf+num_samples_;
-    do
-    {
-      // add channel sample to buffer
-#ifdef PMF_LINEAR_INTERPOLATION
-      uint16_t smp=((uint16_t)pgm_read_word(sample_addr+(sample_pos>>8)));
-      uint8_t sample_pos_frc=sample_pos&255;
-      int16_t interp_smp=((int16_t(int8_t(smp&255))*(256-sample_pos_frc))>>8)+((int16_t(int8_t(smp>>8))*sample_pos_frc)>>8);
-      *buf+=int16_t(sample_volume*interp_smp)>>8;
-#else
-      int8_t smp=(int8_t)pgm_read_byte(sample_addr+(sample_pos>>8));
-      *buf+=int16_t(sample_volume*int16_t(smp))>>8;
-#endif
-
-      // advance sample position
-      sample_pos+=sample_speed;
-      if(sample_pos>=sample_end)
-      {
-        // check for loop
-        if(!sample_loop_len)
-        {
-          channel->sample_speed=0;
-          break;
-        }
-
-        // apply normal/bidi loop
-        if(pgm_read_byte(channel->smp_metadata+pmfcfg_offset_smp_flags)&pmfsmpflag_bidi_loop)
-        {
-          sample_pos-=sample_speed*2;
-          channel->sample_speed=sample_speed=-sample_speed;
-        }
-        else
-          sample_pos-=sample_loop_len;
-      }
-    } while(++buf<buffer_end);
-    channel->sample_pos=sample_pos+sample_pos_offs;
-  } while(++channel!=channel_end);
-
-  // advance buffer
-  ((int16_t*&)buf_.begin)+=num_samples_;
-  buf_.num_samples-=num_samples_;
+  mix_buffer_impl(buf_, num_samples_);
 }
 //----
 
-pmf_player::mixer_buffer pmf_player::get_mixer_buffer()
+pmf_mixer_buffer pmf_player::get_mixer_buffer()
 {
-  cli();
-  const int16_t *playback_pos=s_buffer_playback_pos;
-  sei();
-  mixer_buffer buf={0, 0};
-  if(   (s_subbuffer_write_idx && playback_pos>=s_buffer+audio_subbuffer_size)
-     || (!s_subbuffer_write_idx && playback_pos<s_buffer+audio_subbuffer_size))
-    return buf;
-  buf.begin=s_buffer+s_subbuffer_write_idx*audio_subbuffer_size;
-  buf.num_samples=audio_subbuffer_size;
-  s_subbuffer_write_idx^=1;
-  return buf;
-}
-//----
-
-void pmf_player::visualize_pattern_frame()
-{
-  // get LED states
-  uint16_t led_bits=0;
-  for(unsigned ci=0; ci<m_num_playback_channels; ++ci)
-  {
-    audio_channel &chl=m_channels[ci];
-    if(chl.note_hit)
-    {
-      led_bits|=1<<ci;
-      chl.note_hit=0;
-    }
-  }
-
-  // set LEDs
-  PORTB=led_bits;
-  PORTC=led_bits>>6;
+  return s_audio_buffer.get_mixer_buffer();
 }
 //---------------------------------------------------------------------------
 

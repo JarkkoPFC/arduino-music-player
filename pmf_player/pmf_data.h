@@ -1,5 +1,5 @@
 //============================================================================
-// PMF Player v0.5
+// PMF Player
 //
 // Copyright (c) 2019, Profoundic Technologies, Inc.
 // All rights reserved.
