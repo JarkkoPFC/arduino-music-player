@@ -43,13 +43,13 @@ If the Arduino platform you try to compile the project for isn't supported, you'
 - mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
 - get_mixer_buffer()
 
-*get_sampling_freq()* just returns the closest supported sampling frequency to the requested frequency. MCU likely isn't able to reproduce exactly the requested frequency so this function is used to adjust the player to match the actual supported frequency. It's fine to return the requested frequency since the pitch error is pretty minor and other errors in playback probably hide this anyway.
+*get_sampling_freq()* returns the closest supported sampling frequency matching the requested frequency. The MCU isn't likely able to reproduce exactly the requested frequency so this function is used to adjust the player to match the actual supported frequency. It's fine to return the requested frequency from the function since the pitch error should be pretty minor and other errors in playback probably hide this anyway (e.g. the used 8.8fp sample step).
 
-*start_playback()* is probably the most challenging to implement since it needs to setup an interrupt to run at given frequency, and the interrupt function to feed data to the DAC. *pmf_audio_buffer* can be used partially for the interrupt implementation to read data from the mixed buffer. 
+*start_playback()* is probably the most challenging to implement since it needs to setup an interrupt to run at given frequency, and the interrupt function to feed data to the DAC. *pmf_audio_buffer* can be used for the master audio buffer implementation and to fetch audio data in the interrupt in given bit depth to be fed to the DAC. 
 
-*stop_playback()* just need to stop the interrupt from running
+*stop_playback()* just need to stop the interrupt from running.
 
-*mix_buffer()* mixes all active audio channel samples with given sampling rate and volume to the master buffer. There's reference implementation *mix_buffer_impl()* that can be used for the implementation. However, for more optimal implementation, this function can be written in hand optimized platform specific assembly.
+*mix_buffer()* mixes all active audio channel samples with given sampling rate and volume to the master buffer. There's a reference implementation *mix_buffer_impl()* that can be used for the initial implementation. However, for more optimal implementation, this function can be written in hand optimized platform specific assembly language (see the AVR implementation for example). This function is the most performance intensive part of the player and dominates how many audio channels you can mix at most and in what kind of frequency, or how much spare computing resources you have left for doing other things while the music is playing.
 
 *get_mixer_buffer()* just returns the master audio buffer to the player for some processing.
 
