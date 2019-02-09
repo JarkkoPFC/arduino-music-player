@@ -51,10 +51,20 @@ typedef void(*pmf_tick_callback_t)(void *custom_data_);
 //===========================================================================
 // PMF player config
 //===========================================================================
-#define PMF_AUDIO_LEVEL 2
 //#define PMF_LINEAR_INTERPOLATION         // interpolate samples linearly for better sound quality (more MCU intensive)
 //#define PMF_SERIAL_LOGS                  // enable logging to serial output (disable to save memory)
-enum {pmfplayer_max_channels=16};        // maximum number of audio playback channels (reduce to save memory)
+enum {pmfplayer_max_channels=12};        // maximum number of audio playback channels (reduce to save memory)
+//---------------------------------------------------------------------------
+
+
+//===========================================================================
+// logging
+//===========================================================================
+#ifdef PMF_SERIAL_LOGS
+#define PMF_SERIAL_LOG(...) {char buf[64]; sprintf(buf, __VA_ARGS__); Serial.print(buf);}
+#else
+#define PMF_SERIAL_LOG(...)
+#endif
 //---------------------------------------------------------------------------
 
 
@@ -292,7 +302,8 @@ struct pmf_audio_buffer
   pmf_mixer_buffer get_mixer_buffer();
   //-------------------------------------------------------------------------
 
-  enum {subbuffer_size=buffer_size/2};
+  enum {buf_size=buffer_size};
+  enum {subbuf_size=buffer_size/2};
   volatile uint16_t playback_pos;
   uint8_t subbuf_write_idx;
   T buffer[buffer_size];
@@ -324,14 +335,14 @@ U pmf_audio_buffer<T, buffer_size>::read_sample()
   enum {max_sample_val=sample_range-1};
   uint16_t pbpos=playback_pos;
   T *smp_addr=buffer+pbpos;
-  U smp=U(*smp_addr+(sample_range>>(1+PMF_AUDIO_LEVEL)));
+  U smp=U(*smp_addr+(sample_range>>1));
   *smp_addr=0;
-  if(smp>(sample_range>>PMF_AUDIO_LEVEL)-1)
-    smp=smp>((U(-1)>>1)+(sample_range>>(1+PMF_AUDIO_LEVEL)))?0:max_sample_val;
+  if(smp>sample_range-1)
+    smp=smp>((U(-1)>>1)+(sample_range>>1))?0:max_sample_val;
   if(++pbpos==buffer_size)
     pbpos=0;
   playback_pos=pbpos;
-  return smp<<PMF_AUDIO_LEVEL;
+  return smp;
 }
 //----
 
@@ -341,10 +352,10 @@ pmf_mixer_buffer pmf_audio_buffer<T, buffer_size>::get_mixer_buffer()
   // return buffer for mixing if available (i.e. not playing the one for writing)
   uint16_t pbpos=playback_pos; // note: atomic read thus no need to disable interrupts
   pmf_mixer_buffer buf={0, 0};
-  if(subbuf_write_idx^(pbpos<subbuffer_size))
+  if(subbuf_write_idx^(pbpos<subbuf_size))
     return buf;
-  buf.begin=buffer+subbuf_write_idx*subbuffer_size;
-  buf.num_samples=subbuffer_size;
+  buf.begin=buffer+subbuf_write_idx*subbuf_size;
+  buf.num_samples=subbuf_size;
   subbuf_write_idx^=1;
   return buf;
 }

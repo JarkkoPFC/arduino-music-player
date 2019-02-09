@@ -41,8 +41,13 @@ void row_callback_test(void *custom_data_, uint8_t channel_idx_, uint8_t &note_i
 //===========================================================================
 // example visualization (animate LED's for each track with music)
 //===========================================================================
+#ifdef ARDUINO_ARCH_AVR
+enum {start_led_pin=8};
+enum {max_channel_leds=6};
+#else
 enum {start_led_pin=0};
 enum {max_channel_leds=8};
+#endif
 static void example_visualization(void *player_)
 {
   const pmf_player *player=(const pmf_player*)player_;

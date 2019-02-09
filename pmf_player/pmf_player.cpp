@@ -150,12 +150,6 @@ static const int8_t PROGMEM s_waveforms[3][32]=
   {-2, -6, -10, -14, -18, -22, -26, -30, -34, -38, -42, -46, -50, -54, -58, -62, -66, -70, -74, -78, -82, -86, -90, -94, -98, -102, -106, -110, -114, -118, -122, -126}, // ramp down-wave
   {127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127}, // square-wave
 };
-// logging
-#ifdef PMF_SERIAL_LOGS
-#define PMF_SERIAL_LOG(...) {char buf[64]; sprintf(buf, __VA_ARGS__); Serial.print(buf);}
-#else
-#define PMF_SERIAL_LOG(...)
-#endif
 //---------------------------------------------------------------------------
 
 
@@ -763,7 +757,7 @@ void pmf_player::evaluate_envelopes()
     if(is_note_off)
     {
       // apply note fadeout
-      chl.vol_env.value=(chl.vol_env.value*(chl.vol_fadeout>>8))>>8;
+      chl.vol_env.value=(chl.vol_env.value>>8)*(chl.vol_fadeout>>8);
       uint16_t fadeout_speed=pgm_read_word(chl.inst_metadata+pmfcfg_offset_inst_fadeout_speed);
       chl.vol_fadeout=chl.vol_fadeout>fadeout_speed?chl.vol_fadeout-fadeout_speed:0;
     }

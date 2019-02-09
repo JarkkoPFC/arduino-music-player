@@ -36,12 +36,7 @@
 //===========================================================================
 // audio buffer
 //===========================================================================
-/*todo: change to pmf_audio_buffer*/
-enum {pmfplayer_audio_buffer_size=400};  // number of 16-bit samples in the buffer
-enum {audio_subbuffer_size=pmfplayer_audio_buffer_size/2};
-static int16_t s_buffer[pmfplayer_audio_buffer_size];
-static int16_t *volatile s_buffer_playback_pos;
-static uint8_t s_subbuffer_write_idx=0;
+static pmf_audio_buffer<int16_t, 400> s_audio_buffer;
 //---------------------------------------------------------------------------
 
 
@@ -50,60 +45,7 @@ static uint8_t s_subbuffer_write_idx=0;
 //===========================================================================
 ISR(TIMER1_COMPA_vect)
 {
-  static const int8_t s_mid_buffer_value_hi=1<<(PMF_AUDIO_LEVEL-1);
-  int16_t smp;
-  asm volatile
-  (
-    "ld %A[smp], %a[buffer_pos] \n\t"
-    "st %a[buffer_pos]+, __zero_reg__ \n\t"
-    "ld %B[smp], %a[buffer_pos] \n\t"
-    "lds __tmp_reg__, %[mid_buffer_value_hi] \n\t"
-    "st %a[buffer_pos]+, __tmp_reg__ \n\t"
-
-#if PMF_AUDIO_LEVEL>1
-    "asr %B[smp] \n\t"
-    "ror %A[smp] \n\t"
-#endif
-#if PMF_AUDIO_LEVEL>2
-    "asr %B[smp] \n\t"
-    "ror %A[smp] \n\t"
-#endif
-#if PMF_AUDIO_LEVEL>3
-    "asr %B[smp] \n\t"
-    "ror %A[smp] \n\t"
-#endif
-    "asr %B[smp] \n\t"
-    "breq no_sample_clamp_%= \n\t"
-    "lsl %B[smp] \n\t"
-    "sbc %B[smp], %B[smp] \n\t "
-    "com %B[smp] \n\t"
-    "out %[port_d], %B[smp] \n\t"
-    "rjmp check_buffer_restart_%= \n\t"
-
-    "restart_buffer_%=: \n\t"
-    "ldi %A[buffer_pos], lo8(%[buffer_begin]) \n\t"
-    "ldi %B[buffer_pos], hi8(%[buffer_begin]) \n\t"
-    "rjmp done_%= \n\t\n\t"
-
-    "no_sample_clamp_%=: \n\t"
-    "ror %A[smp] \n\t"
-    "out %[port_d], %A[smp] \n\t"
-
-    "check_buffer_restart_%=: \n\t"
-    "cpi %A[buffer_pos], lo8(%[buffer_end]) \n\t"
-    "ldi %A[smp], hi8(%[buffer_end]) \n\t"
-    "cpc %B[buffer_pos], %A[smp] \n\t"
-    "breq restart_buffer_%= \n\t"
-
-    "done_%=: \n\t"
-
-    :[buffer_pos] "+e" (s_buffer_playback_pos)
-    ,[smp] "=&r" (smp)
-    :[buffer_begin] "p" (s_buffer)
-    ,[buffer_end] "p" (s_buffer+pmfplayer_audio_buffer_size)
-    ,[mid_buffer_value_hi] "X" (&s_mid_buffer_value_hi)
-    ,[port_d] "I" (_SFR_IO_ADDR(PORTD))
-  );
+  PORTD=(uint8_t)s_audio_buffer.read_sample<uint16_t, 8>();
 }
 //----
 
@@ -115,18 +57,9 @@ uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_)
 
 void pmf_player::start_playback(uint32_t sampling_freq_)
 {
-  // setup pins
-  DDRD=0xff;
-  DDRB=0x3f;
-  DDRC=0x3f;
-
-  // clear audio buffer
-  for(unsigned i=0; i<pmfplayer_audio_buffer_size; ++i)
-    s_buffer[i]=0x80<<PMF_AUDIO_LEVEL;
-  s_buffer_playback_pos=s_buffer;
-  s_subbuffer_write_idx=1;
-
   // enable playback interrupt at given playback frequency
+  DDRD=0xff;
+  s_audio_buffer.reset();
   TCCR1A=0;
   TCCR1B=_BV(CS10)|_BV(WGM12); // CTC mode 4 (OCR1A)
   TCCR1C=0;
@@ -141,8 +74,9 @@ void pmf_player::stop_playback()
 }
 //----
 
-void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
+void pmf_player::mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
 {
+//  mix_buffer_impl(buf_, num_samples_);
   int16_t *buffer_begin=(int16_t*)buf_.begin, *buffer_end=buffer_begin+num_samples_;
   audio_channel *channel=m_channels, *channel_end=channel+m_num_playback_channels;
   do
@@ -155,7 +89,7 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
     size_t sample_addr=(size_t)(m_pmf_file+pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_data));
     uint16_t sample_len=pgm_read_word(channel->smp_metadata+pmfcfg_offset_smp_length);/*todo: should be dword*/
     uint16_t loop_len=pgm_read_word(channel->smp_metadata+pmfcfg_offset_smp_loop_length);/*todo: should be dword*/
-    uint8_t volume=(uint16_t(channel->sample_volume)*channel->vol_env.value>>8)>>8;
+    uint8_t volume=(uint16_t(channel->sample_volume)*(channel->vol_env.value>>9))>>8;
     register uint8_t sample_pos_frc=channel->sample_pos;
     register uint16_t sample_pos_int=sample_addr+(channel->sample_pos>>8);
     register uint16_t sample_speed=channel->sample_speed;
@@ -208,13 +142,13 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
       "pop %B[buffer_pos] \n\t"
       "pop %A[buffer_pos] \n\t"
 
-      :[sample_volume] "+d" (sample_volume)
-      ,[sample_speed] "+l" (sample_speed)
+      :[sample_speed] "+l" (sample_speed)
       ,[sample_pos_frc] "+l" (sample_pos_frc)
       ,[sample_pos_int] "+z" (sample_pos_int)
 
       :[sample_end] "r" (sample_end)
-      ,[upper_tmp] "d" (upper_tmp)
+      ,[sample_volume] "a" (sample_volume)
+      ,[upper_tmp] "a" (upper_tmp)
       ,[zero] "r" (zero)
       ,[sample_loop_len] "l" (sample_loop_len)
       ,[buffer_pos] "e" (buffer_begin)
@@ -232,19 +166,9 @@ void pmf_player::mix_buffer(mixer_buffer &buf_, unsigned num_samples_)
 }
 //----
 
-pmf_player::mixer_buffer pmf_player::get_mixer_buffer()
+pmf_mixer_buffer pmf_player::get_mixer_buffer()
 {
-  asm volatile("cli"::);
-  const int16_t *playback_pos=s_buffer_playback_pos;
-  asm volatile("sei"::);
-  mixer_buffer buf={0, 0};
-  if(   (s_subbuffer_write_idx && playback_pos>=s_buffer+audio_subbuffer_size)
-     || (!s_subbuffer_write_idx && playback_pos<s_buffer+audio_subbuffer_size))
-    return buf;
-  buf.begin=s_buffer+s_subbuffer_write_idx*audio_subbuffer_size;
-  buf.num_samples=audio_subbuffer_size;
-  s_subbuffer_write_idx^=1;
-  return buf;
+  return s_audio_buffer.get_mixer_buffer();
 }
 //---------------------------------------------------------------------------
 
