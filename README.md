@@ -29,7 +29,7 @@ Note that DWORD arrays aren't supported on Arduino platforms that doesn't native
 ## Making Electronic Instruments
 The player supports controlling individual audio channels from code to enable creation of electronic instruments. You can override the data for note, instrument/sample, volume and audio effect programmatically for each row & channel as the music advances. **pmf_player.ino** has a simple example which adds an extra audio channel for the music playback and adds a drum hit programmatically every 8th row (see *row_callback_test()* function and commented-out setup in *setup()* function).
 
-For instruments without any pre-recorded music playing on the background, you can create a MOD/S3M/IT/XM with one empty pattern long playlist and the instruments you like to use, for example using [OpenMPT](https://openmpt.org). However, when converting the file to PMF, **pmf_converter** strips out all unreferenced instruments and eliminates empty channels. To avoid this use command-line argument "*-dro*" for the converter (v0.42+):
+For instruments without any pre-recorded music playing on the background, you can create a MOD/S3M/IT/XM with one empty pattern long playlist and the instruments you like to use, for example using [OpenMPT](https://openmpt.org). However, when converting the file to PMF, **pmf_converter** strips out all unreferenced instruments and eliminates empty channels. To avoid this use command-line argument "*-dro*" for the converter:
 ```
 pmf_converter -hex -dro -o ../../pmf_player/music.h -i <mod/s3m/xm/it file>
 ```
@@ -54,7 +54,7 @@ If the Arduino platform you try to compile the project for isn't supported, you'
 *get_mixer_buffer()* just returns the master audio buffer to the player for some processing.
 
 ## Issues
-- If you compile the project for a device with very limited RAM (like 2KB on Arduino Uno) the sketch compilation may fail because of insufficient RAM. You can easily reduce the RAM usage by reducing the number of supported audio channels (32 by default) to something like 16. The number of supported channels is defined in **pmf_player.h** file with *pmfplayer_max_channels* value. The number of channels the player needs to have at minimum depends on the music file, which is shown in "Channels" in the beginning of **music.h** (e.g. 12 for aryx.s3m). If you define less channels than is required by the music file, the player will just ignore the extra channels.
+- If you compile the project for a device with very limited RAM (like 2KB on Arduino Uno) the sketch compilation may fail because of insufficient RAM. You can easily reduce the RAM usage by reducing the number of supported audio channels (12 by default). The number of supported channels is defined in **pmf_player.h** file with *pmfplayer_max_channels* value. The number of channels the player needs to have at minimum depends on the music file, which is shown in "Channels" in the beginning of **music.h** (e.g. 12 for aryx.s3m). If you define less channels than is required by the music file, the player will just ignore the extra channels.
 
 - Another potential problem is that when you try to compile the project you'll get "undefined reference" errors for functions *get_sampling_freq()*, *start_playback()*, *stop_playback()*, *mix_buffer()* and *get_mixer_buffer()*. This is because these functions are not implemented for the device you are compiling the project for. Check out "Porting to a New Platform" for to address this issue. 
 
