@@ -1,0 +1,28 @@
+<Project ProjectName="pmf_converter"
+         OutputFile="@(ProjectName)_@(PlatformName)_@(BuildName)"
+         OutputFileExt="@(ExeExt)"
+         OutputDirectory="../../bin"
+         IntermediateDirectory="../../_intermediate/@(PlatformName)_@(CompilerName)/@(BuildName)/@(ProjectName)"
+         IncludeDirectories="../.."
+         VSProjectGUID="A27531E5-9E5D-4063-A59F-866B6DEB922B" >
+
+  <Builds>
+    <Build BuildName="debug" />
+    <Build BuildName="release" />
+    <Build BuildName="retail" />
+  </Builds>
+
+  <Platforms>
+    <Platform PlatformName="win32" />
+    <Platform PlatformName="win64" />
+  </Platforms>
+
+  <Configurations TemplateFile="@(PlatformName)/@(ProjectConfigName)_@(BuildName)_exe" />
+
+  <FileConfigs RootDir=".." ProjFiles="*.cpp *.h *.inl *.inc" ProjCFiles="*.cpp" >
+    <FileConfig Dir="src" Files="@(ProjFiles)" Recursive="1" />
+    <FileConfig Dir="sxp_src" Files="@(ProjFiles)" Recursive="1" />
+    <FileConfig Dir="sxp_src/platform/win"    Files="@(ProjCFiles)" Recursive="1" Platforms="win32 win64" />
+    <FileConfig Dir="sxp_src/platform/linux"  Files="@(ProjCFiles)" Recursive="1" Platforms="linux32 linux64" />
+  </FileConfigs>
+</Project>

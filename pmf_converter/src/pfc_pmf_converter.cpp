@@ -252,9 +252,9 @@ bool parse_command_arguments(command_arguments &ca_, const char **args_, unsigne
           else if(arg_size==3 && i<num_args_-1 && str_ieq(args_[i], "-ch"))
           {
             // get max channels
-            int max_channels=0;
-            if(str_to_int(max_channels, args_[i+1]) && max_channels>0)
-              ca_.max_channels=max_channels;
+            int64 max_channels=0;
+            if(str_to_int64(max_channels, args_[i+1]) && max_channels>0)
+              ca_.max_channels=(unsigned)max_channels;
           }
         } break;
 

@@ -1,0 +1,176 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="src" />
+    <Filter Include="sxp_src" />
+    <Filter Include="sxp_src\core" />
+    <Filter Include="sxp_src\core\fsys" />
+    <Filter Include="sxp_src\platform" />
+    <Filter Include="sxp_src\platform\linux" />
+    <Filter Include="sxp_src\platform\linux\core" />
+    <Filter Include="sxp_src\platform\linux\core\fsys" />
+    <Filter Include="sxp_src\platform\posix" />
+    <Filter Include="sxp_src\platform\win" />
+    <Filter Include="sxp_src\platform\win\core" />
+    <Filter Include="sxp_src\platform\win\core\fsys" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\src\converter_it.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\converter_mod.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\converter_s3m.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\converter_xm.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\pfc_pmf_converter.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\core\core.cpp">
+      <Filter>sxp_src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\core\cstr.cpp">
+      <Filter>sxp_src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\core\str.cpp">
+      <Filter>sxp_src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\core\streams.cpp">
+      <Filter>sxp_src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\core\utils.cpp">
+      <Filter>sxp_src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\core\fsys\fsys.cpp">
+      <Filter>sxp_src\core\fsys</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\platform\linux\core\linux_core.cpp">
+      <Filter>sxp_src\platform\linux\core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\platform\linux\core\linux_main.cpp">
+      <Filter>sxp_src\platform\linux\core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\platform\linux\core\fsys\linux_fsys.cpp">
+      <Filter>sxp_src\platform\linux\core\fsys</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\platform\posix\posix_fsys.cpp">
+      <Filter>sxp_src\platform\posix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\platform\win\core\win_core.cpp">
+      <Filter>sxp_src\platform\win\core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\platform\win\core\win_main.cpp">
+      <Filter>sxp_src\platform\win\core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\sxp_src\platform\win\core\fsys\win_fsys.cpp">
+      <Filter>sxp_src\platform\win\core\fsys</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\src\pfc_pmf_converter.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\config.h">
+      <Filter>sxp_src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\containers.h">
+      <Filter>sxp_src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\core.h">
+      <Filter>sxp_src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\cstr.h">
+      <Filter>sxp_src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\iterators.h">
+      <Filter>sxp_src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\main.h">
+      <Filter>sxp_src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\meta.h">
+      <Filter>sxp_src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\sort.h">
+      <Filter>sxp_src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\str.h">
+      <Filter>sxp_src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\streams.h">
+      <Filter>sxp_src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\utils.h">
+      <Filter>sxp_src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\core\fsys\fsys.h">
+      <Filter>sxp_src\core\fsys</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\platform\linux\core\linux_core.h">
+      <Filter>sxp_src\platform\linux\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\platform\linux\core\linux_core__gcc.h">
+      <Filter>sxp_src\platform\linux\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\platform\linux\core\linux_main.h">
+      <Filter>sxp_src\platform\linux\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\platform\posix\posix_fsys.h">
+      <Filter>sxp_src\platform\posix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\platform\win\core\win_core.h">
+      <Filter>sxp_src\platform\win\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\platform\win\core\win_core__gcc.h">
+      <Filter>sxp_src\platform\win\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\platform\win\core\win_core__msvc.h">
+      <Filter>sxp_src\platform\win\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\platform\win\core\win_main.h">
+      <Filter>sxp_src\platform\win\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\sxp_src\platform\win\core\fsys\win_fsys.h">
+      <Filter>sxp_src\platform\win\core\fsys</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\sxp_src\core\containers.inl">
+      <Filter>sxp_src\core</Filter>
+    </None>
+    <None Include="..\..\sxp_src\core\core.inl">
+      <Filter>sxp_src\core</Filter>
+    </None>
+    <None Include="..\..\sxp_src\core\cstr.inl">
+      <Filter>sxp_src\core</Filter>
+    </None>
+    <None Include="..\..\sxp_src\core\iterators.inl">
+      <Filter>sxp_src\core</Filter>
+    </None>
+    <None Include="..\..\sxp_src\core\meta.inl">
+      <Filter>sxp_src\core</Filter>
+    </None>
+    <None Include="..\..\sxp_src\core\sort.inl">
+      <Filter>sxp_src\core</Filter>
+    </None>
+    <None Include="..\..\sxp_src\core\str.inl">
+      <Filter>sxp_src\core</Filter>
+    </None>
+    <None Include="..\..\sxp_src\core\streams.inl">
+      <Filter>sxp_src\core</Filter>
+    </None>
+    <None Include="..\..\sxp_src\core\typeid.inc">
+      <Filter>sxp_src\core</Filter>
+    </None>
+    <None Include="..\..\sxp_src\core\utils.inl">
+      <Filter>sxp_src\core</Filter>
+    </None>
+    <None Include="..\..\sxp_src\core\fsys\fsys.inl">
+      <Filter>sxp_src\core\fsys</Filter>
+    </None>
+  </ItemGroup>
+</Project>
