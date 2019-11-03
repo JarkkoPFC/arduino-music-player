@@ -84,7 +84,10 @@ void setup()
 #endif
 
   s_player.load(s_pmf_file);
+/*
+  // Uncomment this code block to enable basic LED visualization (make sure pins don't conflic with used audio device)
   setup_example_visualization(s_player);
+*/
 
 /*
   // Uncomment this code block to demo code-controlled effect. The code adds 13th channel to Aryx and plays drum beat every 8th row on the channel

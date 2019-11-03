@@ -30,19 +30,90 @@
 #include "pmf_player.h"
 #if defined(CORE_TEENSY)
 #include "pmf_data.h"
+// config
+//#define PFC_USE_AUDIO_SHIELD_SGTL5000 // enable playback through SGTL5000-based audio shield
 //---------------------------------------------------------------------------
 
+#ifdef PFC_USE_AUDIO_SHIELD_SGTL5000
+#include "output_i2s.h"
+#include "control_sgtl5000.h"
+//---------------------------------------------------------------------------
 
 //===========================================================================
-// audio buffer
+// mod_stream
 //===========================================================================
 static pmf_audio_buffer<int16_t, 2048> s_audio_buffer;
+class mod_stream: public AudioStream
+{
+public:
+  // construction
+  mod_stream() :AudioStream(0,0) {}
+  //-------------------------------------------------------------------------
+
+private:
+  virtual void update()
+  {
+    audio_block_t *block=allocate();
+    int16_t *data=block->data;
+    for(unsigned i=0; i<AUDIO_BLOCK_SAMPLES; ++i)
+    {
+      uint16_t v=s_audio_buffer.read_sample<uint16_t, 12>();
+      data[i]=(v<<4)-32768;
+    }
+    transmit(block, 0);
+    release(block);
+  }
+};
 //---------------------------------------------------------------------------
 
+static mod_stream s_mod_stream;
+static AudioOutputI2S s_dac;
+static AudioConnection s_c1(s_mod_stream, 0, s_dac, 0);
+static AudioConnection s_c2(s_mod_stream, 0, s_dac, 1);
+static AudioControlSGTL5000 s_sgtl5000;
+//---------------------------------------------------------------------------
 
 //===========================================================================
 // pmf_player
 //===========================================================================
+uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_)
+{
+  return uint32_t(AUDIO_SAMPLE_RATE_EXACT+0.5f);
+}
+//----
+
+void pmf_player::start_playback(uint32_t sampling_freq_)
+{
+  // setup
+  AudioMemory(2);
+  s_sgtl5000.enable();
+  s_sgtl5000.volume(0.6);
+  s_audio_buffer.reset();
+}
+//----
+
+void pmf_player::stop_playback()
+{
+}
+//----
+
+void pmf_player::mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
+{
+  mix_buffer_impl(buf_, num_samples_);
+}
+//----
+
+pmf_mixer_buffer pmf_player::get_mixer_buffer()
+{
+  return s_audio_buffer.get_mixer_buffer();
+}
+//---------------------------------------------------------------------------
+
+#else // PFC_USE_AUDIO_SHIELD_SGTL5000
+//===========================================================================
+// pmf_player
+//===========================================================================
+static pmf_audio_buffer<int16_t, 2048> s_audio_buffer;
 static IntervalTimer s_int_timer;
 //----
 
@@ -88,6 +159,7 @@ pmf_mixer_buffer pmf_player::get_mixer_buffer()
   return s_audio_buffer.get_mixer_buffer();
 }
 //---------------------------------------------------------------------------
+#endif
 
 //===========================================================================
 #endif // CORE_TEENSY
