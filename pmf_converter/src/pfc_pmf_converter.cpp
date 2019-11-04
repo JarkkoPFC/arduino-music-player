@@ -40,7 +40,7 @@ using namespace pfc;
 // PMF format config
 //============================================================================
 // PMF config
-enum {pmf_converter_version=0x0500}; // v0.5
+enum {pmf_converter_version=0x0510}; // v0.51
 enum {pmf_file_version=0x1300}; // v1.3
 // PMF file structure
 enum {pmfcfg_offset_signature=PFC_OFFSETOF(pmf_header, signature)};
@@ -568,7 +568,7 @@ PFC_INLINE bool operator<(const comp_type &ct0_, const comp_type &ct1_)
 void write_pmf_file(pmf_song &song_, const command_arguments &ca_)
 {
   // get song info
-  const unsigned num_channels=song_.channels.size();
+  const unsigned num_channels=(unsigned)song_.channels.size();
   const usize_t num_patterns=song_.patterns.size();
   const usize_t num_instruments=song_.instruments.size();
   const usize_t num_samples=song_.samples.size();
@@ -643,7 +643,7 @@ void write_pmf_file(pmf_song &song_, const command_arguments &ca_)
     if(!ca_.enable_data_ref_optim || (active_channels[i] && active_channel_map.size()<ca_.max_channels))
       active_channel_map.push_back(i);
   }
-  const usize_t num_active_channels=active_channel_map.size();
+  const unsigned num_active_channels=(unsigned)active_channel_map.size();
 
   // re-index the instruments and setup envelopes and sample references
   array<pmf_envelope> envelopes;
@@ -719,7 +719,7 @@ void write_pmf_file(pmf_song &song_, const command_arguments &ca_)
 
   // re-index samples and calculate sample data offsets
   unsigned num_active_samples=0;
-  unsigned total_sample_data_bytes=0;
+  usize_t total_sample_data_bytes=0;
   for(unsigned si=0; si<num_samples; ++si)
   {
     sample_info &sinfo=smp_infos[si];
@@ -729,7 +729,7 @@ void write_pmf_file(pmf_song &song_, const command_arguments &ca_)
       sinfo.index=num_active_samples++;
       sinfo.data_offset=total_sample_data_bytes;
       sinfo.cropped_len=smp.loop_len?smp.loop_start+smp.loop_len:smp.length;
-      total_sample_data_bytes+=sinfo.cropped_len;
+      total_sample_data_bytes+=sinfo.cropped_len+1;
     }
   }
 
@@ -1262,8 +1262,12 @@ void write_pmf_file(pmf_song &song_, const command_arguments &ca_)
   for(unsigned si=0; si<num_samples; ++si)
   {
     const sample_info &sinfo=smp_infos[si];
-    if(!ca_.enable_data_ref_optim || sinfo.is_referred)
-      out_stream.write_bytes(song_.samples[si].data.data, smp_infos[si].cropped_len);
+    usize_t smp_len=smp_infos[si].cropped_len;
+    if(smp_len && (!ca_.enable_data_ref_optim || sinfo.is_referred))
+    {
+      out_stream.write_bytes(song_.samples[si].data.data, smp_len);
+      out_stream<<((uint8*)song_.samples[si].data.data)[smp_len-1];
+    }
   }
   out_stream.flush();
 

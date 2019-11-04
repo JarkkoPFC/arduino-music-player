@@ -1258,7 +1258,9 @@ usize_t pfc::str_strip_outer_whitespace(char *s_, bool strip_all_)
   // strip given character(s) from beginning and end of the string
   PFC_ASSERT_PEDANTIC(s_);
   usize_t ssize=(usize_t)::strlen(s_);
-  if(ssize && s_[ssize-1]<=' ')
+  if(!ssize)
+    return 0;
+  if(s_[ssize-1]<=' ')
   {
     // strip character(s) from the end
     char *tc=s_+ssize, *rc=tc-1;
@@ -1271,7 +1273,7 @@ usize_t pfc::str_strip_outer_whitespace(char *s_, bool strip_all_)
     *rc=0;
     ssize-=usize_t(tc-rc);
   }
-  if(*s_<=' ')
+  if(*s_ && *s_<=' ')
   {
     // strip character(s) from the beginning
     char *rc=s_+1;
@@ -1290,7 +1292,9 @@ usize_t pfc::str_strip_outer_whitespace(wchar_t *s_, bool strip_all_)
   // strip given character(s) from beginning and end of the string
   PFC_ASSERT_PEDANTIC(s_);
   usize_t ssize=(usize_t)::wcslen(s_);
-  if(ssize && s_[ssize-1]<=L' ')
+  if(!ssize)
+    return 0;
+  if(s_[ssize-1]<=L' ')
   {
     // strip character(s) from the end
     wchar_t *tc=s_+ssize, *rc=tc-1;
@@ -1303,7 +1307,7 @@ usize_t pfc::str_strip_outer_whitespace(wchar_t *s_, bool strip_all_)
     *rc=0;
     ssize-=usize_t(tc-rc);
   }
-  if(*s_<=L' ')
+  if(*s_ && *s_<=L' ')
   {
     // strip character(s) from the beginning
     wchar_t *rc=s_+1;

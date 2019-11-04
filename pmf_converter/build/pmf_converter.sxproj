@@ -4,7 +4,8 @@
          OutputDirectory="../../bin"
          IntermediateDirectory="../../_intermediate/@(PlatformName)_@(CompilerName)/@(BuildName)/@(ProjectName)"
          IncludeDirectories="../.."
-         VSProjectGUID="A27531E5-9E5D-4063-A59F-866B6DEB922B" >
+         VSProjectGUID="A27531E5-9E5D-4063-A59F-866B6DEB922B"
+         VSSubSystem="@(VSSubSystem_Console)" >
 
   <Builds>
     <Build BuildName="debug" />
