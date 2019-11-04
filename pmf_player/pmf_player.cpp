@@ -28,7 +28,6 @@
 //============================================================================
 
 #include "pmf_player.h"
-#include "pmf_data.h"
 //---------------------------------------------------------------------------
 
 
@@ -126,7 +125,7 @@ enum {pmfcfg_note_cut=120};
 enum {pmfcfg_note_off=121};
 // PMF effects
 enum {num_subfx_value_bits=4};
-enum {subfx_value_mask=~(-1<<num_subfx_value_bits)};
+enum {subfx_value_mask=~(unsigned(-1)<<num_subfx_value_bits)};
 enum e_pmf_volfx
 {
   pmfvolfx_volume_slide,
@@ -185,9 +184,9 @@ namespace
   //-------------------------------------------------------------------------
 
   //=========================================================================
-  // exp2
+  // fast_exp2
   //=========================================================================
-  float exp2(float x_)
+  float fast_exp2(float x_)
   {
     // map x_ to range [0, 0.5]
     int adjustment=0;
@@ -427,74 +426,6 @@ pmf_channel_info pmf_player::channel_info(uint8_t channel_idx_) const
     info.note_hit=0;
   }
   return info;
-}
-//---------------------------------------------------------------------------
-
-void pmf_player::mix_buffer_impl(pmf_mixer_buffer &buf_, unsigned num_samples_)
-{
-  audio_channel *channel=m_channels, *channel_end=channel+m_num_playback_channels;
-  do
-  {
-    // check for active channel
-    if(!channel->sample_speed)
-      continue;
-
-    // get channel attributes
-    size_t sample_addr=(size_t)(m_pmf_file+pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_data));
-    uint32_t sample_pos=channel->sample_pos;
-    int16_t sample_speed=channel->sample_speed;
-    uint32_t sample_end=uint32_t(pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_length))<<8;
-    uint32_t sample_loop_len=pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_loop_length)<<8;
-    uint8_t sample_volume=(channel->sample_volume*(channel->vol_env.value>>8))>>8;
-    uint32_t sample_pos_offs=sample_end-sample_loop_len;
-    if(sample_pos<sample_pos_offs)
-      sample_pos_offs=0;
-    sample_addr+=sample_pos_offs>>8;
-    sample_pos-=sample_pos_offs;
-    sample_end-=sample_pos_offs;
-
-    // mix channel to the buffer
-    int16_t *buf=(int16_t*)buf_.begin, *buffer_end=buf+num_samples_;
-    do
-    {
-      // add channel sample to buffer
-#ifdef PMF_LINEAR_INTERPOLATION
-      uint16_t smp=((uint16_t)pgm_read_word(sample_addr+(sample_pos>>8)));
-      uint8_t sample_pos_frc=sample_pos&255;
-      int16_t interp_smp=((int16_t(int8_t(smp&255))*(256-sample_pos_frc))>>8)+((int16_t(int8_t(smp>>8))*sample_pos_frc)>>8);
-      *buf+=int16_t(sample_volume*interp_smp)>>8;
-#else
-      int8_t smp=(int8_t)pgm_read_byte(sample_addr+(sample_pos>>8));
-      *buf+=int16_t(sample_volume*int16_t(smp))>>8;
-#endif
-
-      // advance sample position
-      sample_pos+=sample_speed;
-      if(sample_pos>=sample_end)
-      {
-        // check for loop
-        if(!sample_loop_len)
-        {
-          channel->sample_speed=0;
-          break;
-        }
-
-        // apply normal/bidi loop
-        if(pgm_read_byte(channel->smp_metadata+pmfcfg_offset_smp_flags)&pmfsmpflag_bidi_loop)
-        {
-          sample_pos-=sample_speed*2;
-          channel->sample_speed=sample_speed=-sample_speed;
-        }
-        else
-          sample_pos-=sample_loop_len;
-      }
-    } while(++buf<buffer_end);
-    channel->sample_pos=sample_pos+sample_pos_offs;
-  } while(++channel!=channel_end);
-
-  // advance buffer
-  ((int16_t*&)buf_.begin)+=num_samples_;
-  buf_.num_samples-=num_samples_;
 }
 //---------------------------------------------------------------------------
 
@@ -769,7 +700,7 @@ uint16_t pmf_player::get_note_period(uint8_t note_idx_, int16_t finetune_)
 {
   if(m_pmf_flags&pmfflag_linear_freq_table)
     return 7680-note_idx_*64-finetune_/2;
-  return uint16_t(27392.0f/exp2((note_idx_*128+finetune_)/(12.0f*128.0f))+0.5f);
+  return uint16_t(27392.0f/fast_exp2((note_idx_*128+finetune_)/(12.0f*128.0f))+0.5f);
 }
 //----
 
@@ -777,7 +708,7 @@ int16_t pmf_player::get_sample_speed(uint16_t note_period_, bool forward_)
 {
   int16_t speed;
   if(m_pmf_flags&pmfflag_linear_freq_table)
-    speed=int16_t((8363.0f*8.0f/m_sampling_freq)*exp2(float(7680-note_period_)/768.0f)+0.5f);
+    speed=int16_t((8363.0f*8.0f/m_sampling_freq)*fast_exp2(float(7680-note_period_)/768.0f)+0.5f);
   else
     speed=int16_t((7093789.2f*256.0f/m_sampling_freq)/note_period_+0.5f);
   return forward_?speed:-speed;

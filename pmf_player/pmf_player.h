@@ -37,6 +37,7 @@
 //============================================================================
 // external
 #include <Arduino.h>
+#include "pmf_data.h"
 
 // new
 struct pmf_channel_info;
@@ -177,7 +178,7 @@ private:
   void mix_buffer(pmf_mixer_buffer&, unsigned num_samples_);
   pmf_mixer_buffer get_mixer_buffer();
   // platform agnostic reference functions
-  void mix_buffer_impl(pmf_mixer_buffer&, unsigned num_samples_);
+  template<typename T, unsigned channel_bits=8> void mix_buffer_impl(pmf_mixer_buffer&, unsigned num_samples_);
   // audio effects
   void apply_channel_effect_volume_slide(audio_channel&);
   void apply_channel_effect_note_slide(audio_channel&);
@@ -286,6 +287,75 @@ private:
   uint8_t m_pattern_loop_cnt;
   uint8_t m_pattern_loop_row_idx;
 };
+//---------------------------------------------------------------------------
+
+template<typename T, unsigned channel_bits>
+void pmf_player::mix_buffer_impl(pmf_mixer_buffer &buf_, unsigned num_samples_)
+{
+  audio_channel *channel=m_channels, *channel_end=channel+m_num_playback_channels;
+  do
+  {
+    // check for active channel
+    if(!channel->sample_speed)
+      continue;
+
+    // get channel attributes
+    size_t sample_addr=(size_t)(m_pmf_file+pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_data));
+    uint32_t sample_pos=channel->sample_pos;
+    int16_t sample_speed=channel->sample_speed;
+    uint32_t sample_end=uint32_t(pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_length))<<8;
+    uint32_t sample_loop_len=pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_loop_length)<<8;
+    uint8_t sample_volume=(channel->sample_volume*(channel->vol_env.value>>8))>>8;
+    uint32_t sample_pos_offs=sample_end-sample_loop_len;
+    if(sample_pos<sample_pos_offs)
+      sample_pos_offs=0;
+    sample_addr+=sample_pos_offs>>8;
+    sample_pos-=sample_pos_offs;
+    sample_end-=sample_pos_offs;
+
+    // mix channel to the buffer
+    T *buf=(T*)buf_.begin, *buffer_end=buf+num_samples_;
+    do
+    {
+      // add channel sample to buffer
+#ifdef PMF_LINEAR_INTERPOLATION
+      uint16_t smp=((uint16_t)pgm_read_word(sample_addr+(sample_pos>>8)));
+      uint8_t sample_pos_frc=sample_pos&255;
+      int16_t interp_smp=((int16_t(int8_t(smp&255))*(256-sample_pos_frc))>>8)+((int16_t(int8_t(smp>>8))*sample_pos_frc)>>8);
+      *buf+=T(sample_volume*interp_smp)>>(16-channel_bits);
+#else
+      int8_t smp=(int8_t)pgm_read_byte(sample_addr+(sample_pos>>8));
+      *buf+=T(sample_volume*int16_t(smp))>>(16-channel_bits);
+#endif
+
+      // advance sample position
+      sample_pos+=sample_speed;
+      if(sample_pos>=sample_end)
+      {
+        // check for loop
+        if(!sample_loop_len)
+        {
+          channel->sample_speed=0;
+          break;
+        }
+
+        // apply normal/bidi loop
+        if(pgm_read_byte(channel->smp_metadata+pmfcfg_offset_smp_flags)&pmfsmpflag_bidi_loop)
+        {
+          sample_pos-=sample_speed*2;
+          channel->sample_speed=sample_speed=-sample_speed;
+        }
+        else
+          sample_pos-=sample_loop_len;
+      }
+    } while(++buf<buffer_end);
+    channel->sample_pos=sample_pos+sample_pos_offs;
+  } while(++channel!=channel_end);
+
+  // advance buffer
+  ((T*&)buf_.begin)+=num_samples_;
+  buf_.num_samples-=num_samples_;
+}
 //---------------------------------------------------------------------------
 
 

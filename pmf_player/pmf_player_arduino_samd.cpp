@@ -166,7 +166,7 @@ void pmf_player::stop_playback()
 
 void pmf_player::mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
 {
-  mix_buffer_impl(buf_, num_samples_);
+  mix_buffer_impl<int16_t, 8>(buf_, num_samples_);
 }
 //----
 

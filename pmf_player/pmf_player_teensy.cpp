@@ -42,7 +42,7 @@
 //===========================================================================
 // mod_stream
 //===========================================================================
-static pmf_audio_buffer<int16_t, 2048> s_audio_buffer;
+static pmf_audio_buffer<int32_t, 2048> s_audio_buffer;
 class mod_stream: public AudioStream
 {
 public:
@@ -57,8 +57,8 @@ private:
     int16_t *data=block->data;
     for(unsigned i=0; i<AUDIO_BLOCK_SAMPLES; ++i)
     {
-      uint16_t v=s_audio_buffer.read_sample<uint16_t, 12>();
-      data[i]=(v<<4)-32768;
+      uint16_t v=s_audio_buffer.read_sample<uint16_t, 16>();
+      data[i]=v-32768;
     }
     transmit(block, 0);
     release(block);
@@ -87,7 +87,7 @@ void pmf_player::start_playback(uint32_t sampling_freq_)
   // setup
   AudioMemory(2);
   s_sgtl5000.enable();
-  s_sgtl5000.volume(0.6);
+  s_sgtl5000.volume(0.5);
   s_audio_buffer.reset();
 }
 //----
@@ -99,7 +99,7 @@ void pmf_player::stop_playback()
 
 void pmf_player::mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
 {
-  mix_buffer_impl(buf_, num_samples_);
+  mix_buffer_impl<int32_t, 13>(buf_, num_samples_);
 }
 //----
 
@@ -150,7 +150,7 @@ void pmf_player::stop_playback()
 
 void pmf_player::mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
 {
-  mix_buffer_impl(buf_, num_samples_);
+  mix_buffer_impl<int16_t>(buf_, num_samples_);
 }
 //----
 
