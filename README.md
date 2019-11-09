@@ -3,9 +3,12 @@ Few people have been asking for the source code of my Arduino music player, so I
 [![Arduino Music Player on Teensy Audio Shield](https://img.youtube.com/vi/Qk2NLHaBOnQ/0.jpg)](https://youtu.be/Qk2NLHaBOnQ)
 
 ## Basic Installation Instructions
-Once you have downloaded the project, open **pmf_player.ino** in Arduino IDE and compile the project for your target platform (if you have compilation issues, check the "Issues" section). For Teensy and MKR you can just connect DAC0 & Ground (GND) pins to an amplifier line-in to listen to the music. For Arduino AVR you'll need to build an 8-bit resistor DAC (e.g. [resistor ladder](https://en.wikipedia.org/wiki/Resistor_ladder)) connected to data pins 0-7. For other platforms you'll need to port the player to the platform (see "Porting to a New Platform" section) and output to the associated [DAC](https://en.wikipedia.org/wiki/Digital-to-analog_converter).
+Once you have downloaded the project, open **pmf_player.ino** in Arduino IDE and compile the project for your target platform (if you have compilation issues, check the "Issues" section). For Teensy and MKR you can just connect DAC0 & Ground (GND) pins to an amplifier line-in to listen to the music. For Arduino AVR you'll need to build an 8-bit resistor DAC (e.g. [resistor ladder](https://en.wikipedia.org/wiki/Resistor_ladder)) connected to data pins 0-7. To use [Teensy Audio Shield](https://www.pjrc.com/store/teensy3_audio.html) uncomment the following line at the beginning of **pmf_player_teensy.cpp** file or otherwise the player will use the onboard DAC for output:
+```
+#define PFC_USE_AUDIO_SHIELD_SGTL5000
+```
 
-The player comes with an existing music file (**aryx.s3m** by Karsten Koch) that should fit any Arduino device with at least 32Kb of flash memory. You can see Aryx playing below on Arduino Uno so you know what to expect from the birth cry of your player.
+For other platforms you'll need to port the player to the platform (see "Porting to a New Platform" section) and output to the associated [DAC](https://en.wikipedia.org/wiki/Digital-to-analog_converter). The player comes with an existing music file (**aryx.s3m** by Karsten Koch) that should fit any Arduino device with at least 32Kb of flash memory. You can see Aryx playing below on Arduino Uno so you know what to expect from the birth cry of your player.
 
 [![Arduino Uno Playing 12Chl S3M @ 37KHz](https://img.youtube.com/vi/b_QbBE_fXZs/0.jpg)](https://youtu.be/b_QbBE_fXZs)
 
