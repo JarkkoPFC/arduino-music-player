@@ -3,9 +3,9 @@ Few people have been asking for the source code of my Arduino music player, so I
 [![Arduino Music Player on Teensy Audio Shield](https://img.youtube.com/vi/Qk2NLHaBOnQ/0.jpg)](https://youtu.be/Qk2NLHaBOnQ)
 
 ## Basic Installation Instructions
-Once you have downloaded the project, open **pmf_player.ino** in Arduino IDE and compile the project for your target platform (if you have compilation issues, check the "Issues" section). For Teensy and MKR you can just connect DAC0 & Ground (GND) pins to an amplifier line-in to listen to the music. For Arduino AVR you'll need to build an 8-bit resistor DAC (e.g. [resistor ladder](https://en.wikipedia.org/wiki/Resistor_ladder)) connected to data pins 0-7. To use [Teensy Audio Shield](https://www.pjrc.com/store/teensy3_audio.html) uncomment the following line at the beginning of **pmf_player_teensy.cpp** file or otherwise the player will use the onboard DAC for output:
+Once you have downloaded the project, open **pmf_player.ino** in Arduino IDE and compile the project for your target platform (if you have compilation issues, check the "Issues" section). For Teensy and MKR you can just connect DAC0 & Ground (GND) pins to an amplifier line-in to listen to the music. For Arduino AVR you'll need to build an 8-bit resistor DAC (e.g. [resistor ladder](https://en.wikipedia.org/wiki/Resistor_ladder)) connected to data pins 0-7. To use [Teensy Audio Shield](https://www.pjrc.com/store/teensy3_audio.html) change the following define from 0 to 1 in the beginning of **pmf_player.h** file or otherwise the player will use the onboard DAC for output. Note that Teensy 4 has no DAC and will fail to compile without the change:
 ```
-#define PFC_USE_AUDIO_SHIELD_SGTL5000
+#define PFC_USE_SGTL5000_AUDIO_SHIELD 0
 ```
 
 For other platforms you'll need to port the player to the platform (see "Porting to a New Platform" section) and output to the associated [DAC](https://en.wikipedia.org/wiki/Digital-to-analog_converter). The player comes with an existing music file (**aryx.s3m** by Karsten Koch) that should fit any Arduino device with at least 32Kb of flash memory. You can see Aryx playing below on Arduino Uno so you know what to expect from the birth cry of your player.
@@ -40,7 +40,7 @@ This will keep all the instrument data intact and available for programmatic pla
 
 ## Porting to a New Platform
 If the Arduino platform you try to compile the project for isn't supported, you'll need to implement some of the functions for the platform. Most of the code is platform agnostic, but few of the pmf_player functions require special implementations, namely:
-- get_sampling_freq(uint32_t sampling_freq_)
+- get_sampling_freq(uint32_t sampling_freq_) const
 - start_playback(uint32_t sampling_freq_)
 - stop_playback()
 - mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
