@@ -64,7 +64,7 @@ struct pmf_header
 // PMF format config
 //===========================================================================
 // PMF config
-enum {pmf_file_version=0x1300}; // v1.3
+enum {pmf_file_version=0x1400}; // v1.4
 // PMF file structure
 enum {pmfcfg_offset_signature=PFC_OFFSETOF(pmf_header, signature)};
 enum {pmfcfg_offset_version=PFC_OFFSETOF(pmf_header, version)};
@@ -126,21 +126,43 @@ enum {pmfcfg_note_off=121};
 // PMF effects
 enum {num_subfx_value_bits=4};
 enum {subfx_value_mask=~(unsigned(-1)<<num_subfx_value_bits)};
-enum e_pmf_volfx
+enum e_pmfx_volslide_type
 {
-  pmfvolfx_volume_slide,
-  pmfvolfx_note_slide,
-  pmfvolfx_vibrato,
-};
-enum e_pmfx_vslide_type
-{
-  pmffx_vslidetype_down       =0x00,
-  pmffx_vslidetype_up         =0x10,
-  pmffx_vslidetype_fine_down  =0x20,
-  pmffx_vslidetype_fine_up    =0x30,
+  pmffx_volsldtype_down      =0x00,
+  pmffx_volsldtype_up        =0x10,
+  pmffx_volsldtype_fine_down =0x20,
+  pmffx_volsldtype_fine_up   =0x30,
   //----
-  pmffx_vslidetype_mask       =0x30,
-  pmffx_vsslidetype_fine_mask =0x20
+  pmffx_volsldtype_mask      =0x30,
+  pmffx_volsldtype_fine_mask =0x20
+};
+enum e_pmfx_panslide_type
+{
+  pmffx_pansldtype_left        =0x80,
+  pmffx_pansldtype_right       =0xa0,
+  pmffx_pansldtype_fine_left   =0xc0,
+  pmffx_pansldtype_fine_right  =0xe0,
+  //----
+  pmffx_pansldtype_val_mask    =0x0f,
+  pmffx_pansldtype_dir_mask    =0x20,
+  pmffx_pansldtype_fine_mask   =0x40,
+  pmffx_pansldtype_enable_mask =0x80
+};
+enum e_pmf_voleffect
+{
+  pmfvolfx_vol_slide            =0x40,
+  pmfvolfx_vol_slide_down       =0x40,
+  pmfvolfx_vol_slide_up         =0x50,
+  pmfvolfx_vol_slide_fine_down  =0x60,
+  pmfvolfx_vol_slide_fine_up    =0x70,
+  pmfvolfx_note_slide_down      =0x80,
+  pmfvolfx_note_slide_up        =0x90,
+  pmfvolfx_note_slide           =0xa0,
+  pmfvolfx_set_vibrato_speed    =0xb0,
+  pmfvolfx_vibrato              =0xc0,
+  pmfvolfx_set_panning          =0xd0,
+  pmfvolfx_pan_slide_fine_left  =0xe0,
+  pmfvolfx_pan_slide_fine_right =0xf0,
 };
 // waveform tables
 static const int8_t PROGMEM s_waveforms[3][32]=
@@ -302,10 +324,12 @@ void pmf_player::start(uint32_t sampling_freq_, uint16_t playlist_pos_)
   if(!m_pmf_file)
     return;
   memset(m_channels, 0, sizeof(m_channels));
+  uint16_t playlist_len=pgm_read_word(m_pmf_file+pmfcfg_offset_playlist_length);
   for(unsigned ci=0; ci<m_num_playback_channels; ++ci)
   {
     audio_channel &chl=m_channels[ci];
-    chl.fxmem_vol_slide_spd=pmffx_vslidetype_down|0x01;
+    chl.sample_panning=pgm_read_byte(m_pmf_file+pmfcfg_offset_playlist+playlist_len+ci);
+    chl.fxmem_vol_slide_spd=pmffx_volsldtype_down|0x01;
     chl.vol_env.value=0xffff;
     chl.pitch_env.value=0x8000;
   }
@@ -313,7 +337,7 @@ void pmf_player::start(uint32_t sampling_freq_, uint16_t playlist_pos_)
   // init playback state
   m_sampling_freq=get_sampling_freq(sampling_freq_);
   m_num_processed_pattern_channels=min(m_num_pattern_channels, m_num_playback_channels);
-  init_pattern(playlist_pos_<pgm_read_word(m_pmf_file+pmfcfg_offset_playlist_length)?playlist_pos_:0);
+  init_pattern(playlist_pos_<playlist_len?playlist_pos_:0);
   m_speed=pgm_read_byte(m_pmf_file+pmfcfg_offset_init_speed);
   m_note_period_min=pgm_read_word(m_pmf_file+pmfcfg_offset_note_period_min);
   m_note_period_max=pgm_read_word(m_pmf_file+pmfcfg_offset_note_period_max);
@@ -433,7 +457,7 @@ void pmf_player::apply_channel_effect_volume_slide(audio_channel &chl_)
 {
   // slide volume either up/down defined by effect
   int8_t vdelta=(chl_.fxmem_vol_slide_spd&0xf)<<2;
-  int16_t v=int16_t(chl_.sample_volume)+((chl_.fxmem_vol_slide_spd&pmffx_vslidetype_mask)==pmffx_vslidetype_down?-vdelta:vdelta);
+  int16_t v=int16_t(chl_.sample_volume)+((chl_.fxmem_vol_slide_spd&pmffx_volsldtype_mask)==pmffx_volsldtype_down?-vdelta:vdelta);
   chl_.sample_volume=v<0?0:v>255?255:v;
 }
 //----
@@ -477,7 +501,7 @@ void pmf_player::apply_channel_effects()
     chl.note_hit=0;
     switch(chl.vol_effect)
     {
-      case pmfvolfx_volume_slide: apply_channel_effect_volume_slide(chl); break;
+      case pmfvolfx_vol_slide: apply_channel_effect_volume_slide(chl); break;
       case pmfvolfx_note_slide: apply_channel_effect_note_slide(chl); break;
       case pmfvolfx_vibrato: apply_channel_effect_vibrato(chl); break;
     }
@@ -501,7 +525,7 @@ void pmf_player::apply_channel_effects()
       {
         if(chl.fxmem_note_slide_spd<0xe0)
           apply_channel_effect_note_slide(chl);
-        if(!(chl.fxmem_vol_slide_spd&pmffx_vsslidetype_fine_mask))
+        if(!(chl.fxmem_vol_slide_spd&pmffx_volsldtype_fine_mask))
           apply_channel_effect_volume_slide(chl);
       } break;
 
@@ -512,7 +536,7 @@ void pmf_player::apply_channel_effects()
       case pmffx_vibrato_vol_slide:
       {
         apply_channel_effect_vibrato(chl);
-        if(!(chl.fxmem_vol_slide_spd&pmffx_vsslidetype_fine_mask))
+        if(!(chl.fxmem_vol_slide_spd&pmffx_volsldtype_fine_mask))
           apply_channel_effect_volume_slide(chl);
       } break;
 
@@ -561,6 +585,12 @@ void pmf_player::apply_channel_effects()
           chl.effect=0xff;
         }
       } break;
+
+      case pmffx_panning:
+      {
+        uint8_t pan_spd=(chl.fxmem_panning_spd&pmffx_pansldtype_val_mask)*4;
+        chl.sample_panning=int8_t(chl.fxmem_panning_spd&pmffx_pansldtype_dir_mask?min(127, int(chl.sample_panning)+pan_spd):max(-127, int(chl.sample_panning)-pan_spd));
+      } break;
     }
   }
 }
@@ -573,12 +603,12 @@ bool pmf_player::init_effect_volume_slide(audio_channel &chl_, uint8_t effect_da
     chl_.fxmem_vol_slide_spd=effect_data_;
   effect_data_=chl_.fxmem_vol_slide_spd;
 
-  if(effect_data_&pmffx_vsslidetype_fine_mask)
+  if(effect_data_&pmffx_volsldtype_fine_mask)
   {
     // fine slide
-    uint8_t fx_type=effect_data_&pmffx_vslidetype_mask;
+    uint8_t fx_type=effect_data_&pmffx_volsldtype_mask;
     int8_t vdelta=(effect_data_&0xf)<<2;
-    int16_t v=int16_t(chl_.sample_volume)+(fx_type==pmffx_vslidetype_fine_down?-vdelta:vdelta);
+    int16_t v=int16_t(chl_.sample_volume)+(fx_type==pmffx_volsldtype_fine_down?-vdelta:vdelta);
     chl_.sample_volume=v<0?0:v>255?255:v;
     return false;
   }
@@ -718,12 +748,14 @@ int16_t pmf_player::get_sample_speed(uint16_t note_period_, bool forward_)
 void pmf_player::set_instrument(audio_channel &chl_, uint8_t inst_idx_, uint8_t note_idx_)
 {
   uint8_t inst_vol=0xff;
+  int8_t panning=-128;
   if(m_num_instruments)
   {
     // setup instrument metadata and check for note mapping
     const uint8_t *inst_metadata=m_pmf_file+pgm_read_dword(m_pmf_file+pmfcfg_offset_inst_meta_offs)+inst_idx_*pmfcfg_instrument_metadata_size;
     chl_.inst_metadata=inst_metadata;
     inst_vol=pgm_read_byte(inst_metadata+pmfcfg_offset_inst_volume);
+    panning=pgm_read_byte(inst_metadata+pmfcfg_offset_inst_panning);
     uint16_t sample_idx=pgm_read_word(inst_metadata+pmfcfg_offset_inst_sample_idx);
     uint8_t note_idx_offs=0;
     if(sample_idx>=m_num_samples)
@@ -769,9 +801,15 @@ void pmf_player::set_instrument(audio_channel &chl_, uint8_t inst_idx_, uint8_t 
   chl_.smp_metadata=smp_metadata;
   chl_.sample_volume=(uint16_t(inst_vol)*uint16_t(pgm_read_byte(chl_.smp_metadata+pmfcfg_offset_smp_volume)))>>8;
   chl_.sample_finetune=pgm_read_word(chl_.smp_metadata+pmfcfg_offset_smp_finetune);
+
+  // setup panning
+  if(panning==-128)
+    panning=pgm_read_byte(smp_metadata+pmfcfg_offset_smp_loop_length_and_panning+3);
+  if(panning!=-128)
+    chl_.sample_panning=panning;
 }
 //----
-
+ 
 void pmf_player::hit_note(audio_channel &chl_, uint8_t note_idx_, uint8_t sample_start_pos_, bool reset_sample_pos_)
 {
   if(!chl_.smp_metadata)
@@ -886,17 +924,17 @@ void pmf_player::process_pattern_row()
         switch(volume&0xf0)
         {
           // volume slide
-          case 0x40:
-          case 0x50:
-          case 0x60:
-          case 0x70:
+          case pmfvolfx_vol_slide_down:
+          case pmfvolfx_vol_slide_up:
+          case pmfvolfx_vol_slide_fine_down:
+          case pmfvolfx_vol_slide_fine_up:
           {
             if(init_effect_volume_slide(chl, volume&0x3f))
-              chl.vol_effect=pmfvolfx_volume_slide;
+              chl.vol_effect=pmfvolfx_vol_slide;
           } break;
 
           // note slide down
-          case 0x80:
+          case pmfvolfx_note_slide_down:
           {
             // init note slide down and disable note retrigger
             if(init_effect_note_slide(chl, volfx_data, note_slide_down_target_period))
@@ -904,7 +942,7 @@ void pmf_player::process_pattern_row()
           } break;
           
           // note slide up
-          case 0x90:
+          case pmfvolfx_note_slide_up:
           {
             // init note slide up and disable note retrigger
             if(init_effect_note_slide(chl, volfx_data, note_slide_up_target_period))
@@ -912,7 +950,7 @@ void pmf_player::process_pattern_row()
           } break;
 
           // note slide
-          case 0xa0:
+          case pmfvolfx_note_slide:
           {
             // init note slide and disable note retrigger
             if(init_effect_note_slide(chl, volfx_data, note_idx!=0xff?get_note_period(note_idx, chl.sample_finetune):0))
@@ -921,18 +959,40 @@ void pmf_player::process_pattern_row()
           } break;
 
           // set vibrato speed
-          case 0xb0:
+          case pmfvolfx_set_vibrato_speed:
           {
             if(volfx_data)
               chl.fxmem_vibrato_spd=volfx_data;
           } break;
 
           // vibrato
-          case 0xc0:
+          case pmfvolfx_vibrato:
           {
             init_effect_vibrato(chl, volfx_data, 0);
             chl.vol_effect=pmfvolfx_vibrato;
             update_sample_speed=false;
+          } break;
+
+          // set panning
+          case pmfvolfx_set_panning:
+          {
+            chl.sample_panning=volfx_data?(volfx_data|(volfx_data<<4))-128:-127;
+          } break;
+
+          // fine panning slide left
+          case pmfvolfx_pan_slide_fine_left:
+          {
+            if(chl.sample_panning==-128)
+              break;
+            chl.sample_panning=int8_t(max(-127, int(chl.sample_panning)-volfx_data*4));
+          } break;
+
+          // fine panning slide right
+          case pmfvolfx_pan_slide_fine_right:
+          {
+            if(chl.sample_panning==-128)
+              break;
+            chl.sample_panning=int8_t(min(127, int(chl.sample_panning)+volfx_data*4));
           } break;
         }
       }
@@ -1117,6 +1177,36 @@ void pmf_player::process_pattern_row()
               note_idx=0xff;
             } break;
           }
+        } break;
+
+        case pmffx_panning:
+        {
+          // check for panning slide
+          if(effect_data&pmffx_pansldtype_enable_mask)
+          {
+            // check valid panning state for sliding and update effect memory
+            if(chl.sample_panning==-128)
+              break;
+            uint8_t panning_spd=effect_data&pmffx_pansldtype_val_mask;
+            if(panning_spd)
+              chl.fxmem_panning_spd=effect_data;
+            else
+            {
+              effect_data=chl.fxmem_panning_spd;
+              panning_spd=effect_data&pmffx_pansldtype_val_mask;
+            }
+
+            // apply fine slide or setup normal slide
+            if(effect_data&pmffx_pansldtype_fine_mask)
+            {
+              panning_spd*=4;
+              chl.sample_panning=int8_t(effect_data&pmffx_pansldtype_dir_mask?min(127, int(chl.sample_panning)+panning_spd):max(-127, int(chl.sample_panning)-panning_spd));
+            }
+            else
+              chl.effect=pmffx_panning;
+          }
+          else
+            chl.sample_panning=effect_data<<1;
         } break;
       }
     }

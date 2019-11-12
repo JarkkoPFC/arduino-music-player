@@ -49,7 +49,7 @@ ISR(TIMER1_COMPA_vect)
 }
 //----
 
-uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_)
+uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_) const
 {
   return sampling_freq_;
 }
@@ -76,7 +76,6 @@ void pmf_player::stop_playback()
 
 void pmf_player::mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
 {
-//  mix_buffer_impl(buf_, num_samples_);
   int16_t *buffer_begin=(int16_t*)buf_.begin, *buffer_end=buffer_begin+num_samples_;
   audio_channel *channel=m_channels, *channel_end=channel+m_num_playback_channels;
   do
@@ -88,7 +87,7 @@ void pmf_player::mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
     // get channel attributes
     size_t sample_addr=(size_t)(m_pmf_file+pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_data));
     uint16_t sample_len=pgm_read_word(channel->smp_metadata+pmfcfg_offset_smp_length);/*todo: should be dword*/
-    uint16_t loop_len=pgm_read_word(channel->smp_metadata+pmfcfg_offset_smp_loop_length);/*todo: should be dword*/
+    uint16_t loop_len=pgm_read_word(channel->smp_metadata+pmfcfg_offset_smp_loop_length_and_panning);/*todo: should be dword*/
     uint8_t volume=(uint16_t(channel->sample_volume)*(channel->vol_env.value>>9))>>8;
     register uint8_t sample_pos_frc=channel->sample_pos;
     register uint16_t sample_pos_int=sample_addr+(channel->sample_pos>>8);

@@ -151,108 +151,121 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
           // map volume/volume effect
           if(volume>=0x10 && volume<=0x50)
             track_row->volume=volume<0x50?volume-0x10:63; // set volume
-          else if(volume>=0x60 && volume<=0x9f)
-            track_row->volume=volume-0x60+0x40;           // volume slide
+          else if(volume>=0x60 && volume<=0x6f)
+            track_row->volume=volume-0x60+pmfvolfx_vol_slide_down;
+          else if(volume>=0x70 && volume<=0x7f)
+            track_row->volume=volume-0x70+pmfvolfx_vol_slide_up;
+          else if(volume>=0x80 && volume<=0x8f)
+            track_row->volume=volume-0x80+pmfvolfx_vol_slide_fine_down;
+          else if(volume>=0x90 && volume<=0x9f)
+            track_row->volume=volume-0x90+pmfvolfx_vol_slide_fine_up;
           else if(volume>=0xa0 && volume<=0xaf)
-            track_row->volume=volume-0xa0+0xb0;           // set vibrato speed
+            track_row->volume=volume-0xa0+pmfvolfx_set_vibrato_speed;
           else if(volume>=0xb0 && volume<=0xbf)
-            track_row->volume=volume-0xb0+0xc0;           // vibrato
+            track_row->volume=volume-0xb0+pmfvolfx_vibrato;
+          else if(volume>=0xc0 && volume<=0xcf)
+            track_row->volume=volume-0xc0+pmfvolfx_set_panning;
+          else if(volume>=0xd0 && volume<=0xdf)
+            track_row->volume=volume-0xd0+pmfvolfx_pan_slide_fine_left;
+          else if(volume>=0xe0 && volume<=0xef)
+            track_row->volume=volume-0xe0+pmfvolfx_pan_slide_fine_right;
           else if(volume>=0xf0 && volume<=0xff)
-            track_row->volume=volume-0xf0+0x0a0;          // tone porta (note slide)
+            track_row->volume=volume-0xf0+pmfvolfx_note_slide;
 
           // effect
           if(effect || effect_data)
           {
             switch(effect)
             {
-              // arpeggio
+              // 0xy: arpeggio
               case 0:
               {
                 track_row->effect=pmffx_arpeggio;
                 track_row->effect_data=effect_data;
               } break;
 
-              // porta up
+              // 1xx: portamento up
               case 1:
               {
                 track_row->effect=pmffx_note_slide_up;
                 track_row->effect_data=effect_data<0xe0?effect_data:0xdf;
               } break;
 
-              // porta down
+              // 2xx: portamento down
               case 2:
               {
                 track_row->effect=pmffx_note_slide_down;
                 track_row->effect_data=effect_data<0xe0?effect_data:0xdf;
               } break;
 
-              // tone porta
+              // 3xx: tone portamento
               case 3:
               {
                 track_row->effect=pmffx_note_slide;
                 track_row->effect_data=effect_data<0xe0?effect_data:0xdf;
               } break;
 
-              // vibrato
+              // 4xy: vibrato
               case 4:
               {
                 track_row->effect=pmffx_vibrato;
                 track_row->effect_data=effect_data;
               } break;
 
-              // tone porta + volume slide
+              // 5xy: tone portamento + volume slide
               case 5:
               {
                 // ignore illegal volume slide
                 if(effect_data&0xf0 && effect_data&0x0f)
                   break;
                 track_row->effect=pmffx_note_vol_slide;
-                track_row->effect_data=effect_data<0x10?pmffx_vslidetype_down+effect_data:(pmffx_vslidetype_up+(effect_data>>4));
+                track_row->effect_data=effect_data<0x10?pmffx_volsldtype_down+effect_data:(pmffx_volsldtype_up+(effect_data>>4));
               } break;
 
-              // vibrato + volume slide
+              // 6xy: vibrato + volume slide
               case 6:
               {
                 // ignore illegal volume slide
                 if(effect_data&0xf0 && effect_data&0x0f)
                   break;
                 track_row->effect=pmffx_vibrato_vol_slide;
-                track_row->effect_data=effect_data<0x10?pmffx_vslidetype_down+effect_data:(pmffx_vslidetype_up+(effect_data>>4));
+                track_row->effect_data=effect_data<0x10?pmffx_volsldtype_down+effect_data:(pmffx_volsldtype_up+(effect_data>>4));
               } break;
 
-              // tremolo
+              // 7xy: tremolo
               case 7:
               {
                 track_row->effect=pmffx_tremolo;
                 track_row->effect_data=effect_data;
               } break;
 
-              // set panning
+              // 8xx: set panning
               case 8:
               {
-                /*todo*/
+                track_row->effect=pmffx_panning;
+                track_row->effect_data=uint8(effect_data>2?effect_data-128:-126)>>1; // 0=left(-63), 128=center(0), 255=right(63)
               } break;
 
-              // set sample offset
+              // 9xx: set sample offset
               case 9:
               {
                 track_row->effect=pmffx_set_sample_offs;
                 track_row->effect_data=effect_data;
               } break;
 
-              // volume slide
+              // Axx: volume slide
               case 10:
               {
                 track_row->effect=pmffx_volume_slide;
                 if(effect_data&0xf0)
-                  track_row->effect_data=(effect_data>>4)|pmffx_vslidetype_up;
+                  track_row->effect_data=(effect_data>>4)|pmffx_volsldtype_up;
                 else if(effect_data&0x0f)
-                  track_row->effect_data=effect_data|pmffx_vslidetype_down;
+                  track_row->effect_data=effect_data|pmffx_volsldtype_down;
                 else
                   track_row->effect_data=0;
               } break;
 
-              // position jump
+              // Bxx: position jump
               case 11:
               {
                 if(effect_data<song_len)
@@ -262,13 +275,13 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
                 }
               } break;
 
-              // set volume
+              // Cxx: set volume
               case 12:
               {
                 track_row->volume=effect_data>63?63:effect_data;
               } break;
 
-              // pattern break
+              // Dxx: pattern break
               case 13:
               {
                 uint8 row=(effect_data>>4)*10+(effect_data&0x0f);
@@ -276,33 +289,33 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
                 track_row->effect_data=row;
               } break;
 
-              // sub-effect
+              // Exx: sub-effect
               case 14:
               {
                 switch(effect_data>>4)
                 {
-                  // fine porta up
+                  // E1x: fine portamento up
                   case 1:
                   {
                     track_row->effect=pmffx_note_slide_up;
                     track_row->effect_data=(effect_data&0xf)+0xf0; /*todo: not quite sure if this should be fine (0xf0) or extra-fine (0xe0) slide like in MOD*/
                   } break;
 
-                  // fine porta down
+                  // E2x: fine portamento down
                   case 2:
                   {
                     track_row->effect=pmffx_note_slide_down;
                     track_row->effect_data=(effect_data&0xf)+0xf0; /*todo: not quite sure if this should be fine (0xf0) or extra-fine (0xe0) slide like in MOD*/
                   } break;
 
-                  // set gliss control
+                  // E3x: set glissando control
                   case 3:
                   {
                     track_row->effect=pmffx_subfx;
                     track_row->effect_data=(pmfsubfx_set_glissando<<num_subfx_value_bits)|(effect_data&0xf?1:0);
                   } break;
 
-                  // set vibrato control
+                  // E4x: set vibrato control
                   case 4:
                   {
                     if((effect_data&0xf)<8)
@@ -312,7 +325,7 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
                     }
                   } break;
 
-                  // set finetune
+                  // E5x: set finetune
                   case 5:
                   {
                     track_row->effect=pmffx_subfx;
@@ -320,14 +333,14 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
                     track_row->effect_data=(pmfsubfx_set_finetune<<num_subfx_value_bits)|(finetune_val&subfx_value_mask);
                   } break;
 
-                  // loop pattern
+                  // E6x: loop pattern
                   case 6:
                   {
                     track_row->effect=pmffx_subfx;
                     track_row->effect_data=(pmfsubfx_pattern_loop<<num_subfx_value_bits)|(effect_data&0xf);
                   } break;
 
-                  // set tremolo control
+                  // E7x: set tremolo control
                   case 7:
                   {
                     if((effect_data&0xf)<8)
@@ -337,42 +350,49 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
                     }
                   } break;
 
-                  // retrig note
+                  // E8x: set panning (coarse)
+                  case 8:
+                  {
+                    track_row->effect=pmffx_panning;
+                    track_row->effect_data=uint8(effect_data&0xf?(effect_data&0xf)+(effect_data<<4)-128:-126)>>1; // 0=left(-63), 15=right(63)
+                  } break;
+
+                  // E9x: retrigger note
                   case 9:
                   {
                     track_row->effect=pmffx_retrig_vol_slide;
                     track_row->effect_data=effect_data&0xf;
                   } break;
 
-                  // fine volume slide up
+                  // EAx: fine volume slide up
                   case 10:
                   {
                     track_row->effect=pmffx_volume_slide;
-                    track_row->effect_data=(effect_data&0xf)|pmffx_vslidetype_fine_up;
+                    track_row->effect_data=(effect_data&0xf)|pmffx_volsldtype_fine_up;
                   } break;
 
-                  // fine volume slide down
+                  // EBx: fine volume slide down
                   case 11:
                   {
                     track_row->effect=pmffx_volume_slide;
-                    track_row->effect_data=(effect_data&0xf)|pmffx_vslidetype_fine_down;
+                    track_row->effect_data=(effect_data&0xf)|pmffx_volsldtype_fine_down;
                   } break;
 
-                  // note cut
+                  // ECx: note cut
                   case 12:
                   {
                     track_row->effect=pmffx_subfx;
                     track_row->effect_data=(pmfsubfx_note_cut<<num_subfx_value_bits)|(effect_data&0xf);
                   } break;
 
-                  // note delay
+                  // EDx: note delay
                   case 13:
                   {
                     track_row->effect=pmffx_subfx;
                     track_row->effect_data=(pmfsubfx_note_delay<<num_subfx_value_bits)|(effect_data&0xf);
                   } break;
 
-                  // pattern delay
+                  // EEx: pattern delay
                   case 14:
                   {
                     if(effect_data&0xf)
@@ -384,7 +404,7 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
                 }
               } break;
 
-              // set tempo/bpm
+              // Fxx: set tempo/bpm
               case 15:
               {
                 if(effect_data)
@@ -394,61 +414,67 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
                 }
               } break;
 
-              // set global volume
+              // Gxx: set global volume
               case 16:
               {
                 /*todo*/
               } break;
 
-              // global volume slide
+              // Hxy: global volume slide
               case 17:
               {
                 /*todo*/
               } break;
 
-              // key off
+              // Kxx: key off
               case 20:
               {
                 track_row->note=0xfe;
               } break;
 
-              // set envelope pos
+              // Lxx: set envelope pos
               case 21:
               {
                 /*todo*/
               } break;
 
-              // panning slide
+              // Pxy: panning slide
               case 25:
               {
-                /*todo*/
+                if(effect_data&0x0f && effect_data&0xf0)
+                  break;
+                track_row->effect=pmffx_panning;
+                if(effect_data)
+                  track_row->effect_data=effect_data&0x0f?((effect_data&0x0f)|pmffx_pansldtype_fine_left):(effect_data>>4)|pmffx_pansldtype_fine_right;
+                else
+                  track_row->effect_data=pmffx_pansldtype_enable_mask;
               } break;
 
-              // multi retrig
+              // Rxy: multi retrigger
               case 27:
               {
                 /*todo*/
               } break;
 
-              // tremor
+              // Txy: tremor
               case 29:
               {
                 /*todo*/
               } break;
 
-              // extra fine porta
+              // Xxy: extra fine portamento
               case 33:
               {
                 switch(effect_data>>4)
                 {
-                  // extra fine porta up
+                  // X1y: extra fine portamento up
                   case 1:
                   {
                     track_row->effect=pmffx_note_slide_up;
                     track_row->effect_data=(effect_data&0xf)+0xe0;
                   } break;
 
-                  // extra fine porta down
+                  // X2y: extra fine portamento down
                   case 2:
                   {
                     track_row->effect=pmffx_note_slide_down;
@@ -573,6 +599,7 @@ e_pmf_error convert_xm(bin_input_stream_base &in_file_, pmf_song &song_)
           pmf_smp.loop_start=smp.loop_start;
           pmf_smp.loop_len=smp.type&3?smp.loop_length:0;
           pmf_smp.volume=smp.volume<64?smp.volume<<2:0xff;
+          pmf_smp.panning=uint8(smp.panning?smp.panning-128:-127);
           pmf_smp.data=smp.data;
           pmf_smp.finetune=smp.rel_note*128+smp.finetune;
           pmf_inst.fadeout_speed=vol_env_type&1?uint16(min(vol_fadeout*2, 65535)):65535;

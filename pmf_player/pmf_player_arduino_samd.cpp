@@ -137,7 +137,7 @@ uint16_t get_clk_div(uint32_t sampling_freq_)
 }
 //---------------------------------------------------------------------------
 
-uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_)
+uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_) const
 {
   // return closest frequency representable with the timer
   uint16_t clk_div=get_clk_div(sampling_freq_);
@@ -166,7 +166,7 @@ void pmf_player::stop_playback()
 
 void pmf_player::mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
 {
-  mix_buffer_impl<int16_t, 8>(buf_, num_samples_);
+  mix_buffer_impl<int16_t, false, 8>(buf_, num_samples_);
 }
 //----
 

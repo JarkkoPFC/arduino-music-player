@@ -30,53 +30,114 @@
 #include "pmf_player.h"
 #if defined(CORE_TEENSY)
 #include "pmf_data.h"
-// config
-//#define PFC_USE_AUDIO_SHIELD_SGTL5000 // enable playback through SGTL5000-based audio shield
 //---------------------------------------------------------------------------
 
-#ifdef PFC_USE_AUDIO_SHIELD_SGTL5000
+#if PFC_USE_SGTL5000_AUDIO_SHIELD==1
 #include "output_i2s.h"
 #include "control_sgtl5000.h"
 //---------------------------------------------------------------------------
 
 //===========================================================================
-// mod_stream
+// mod_audio_stream
 //===========================================================================
-static pmf_audio_buffer<int32_t, 2048> s_audio_buffer;
-class mod_stream: public AudioStream
+class mod_audio_stream: public AudioStream
 {
 public:
   // construction
-  mod_stream() :AudioStream(0,0) {}
+  mod_audio_stream();
+  ~mod_audio_stream();
+  void init(AudioStream &output_, bool stereo_=true);
+  pmf_mixer_buffer get_mixer_buffer();
   //-------------------------------------------------------------------------
 
 private:
-  virtual void update()
+  virtual void update();
+  //-------------------------------------------------------------------------
+  
+  pmf_audio_buffer<int32_t, 2048> m_audio_buffer;
+  AudioConnection *m_connection_l, *m_connection_r;
+  bool m_stereo;
+};
+//---------------------------------------------------------------------------
+
+mod_audio_stream::mod_audio_stream()
+  :AudioStream(0, 0)
+  ,m_connection_l(0)
+  ,m_connection_r(0)
+  ,m_stereo(false)
+{
+}
+//----
+
+mod_audio_stream::~mod_audio_stream()
+{
+  delete m_connection_l;
+  delete m_connection_r;
+}
+//----
+
+void mod_audio_stream::init(AudioStream &output_, bool stereo_)
+{
+  m_audio_buffer.reset();
+  m_connection_l=new AudioConnection(*this, 0, output_, 0);
+  m_connection_r=new AudioConnection(*this, stereo_?1:0, output_, 1);
+  m_stereo=stereo_;
+}
+//----
+
+pmf_mixer_buffer mod_audio_stream::get_mixer_buffer()
+{
+  pmf_mixer_buffer buf=m_audio_buffer.get_mixer_buffer();
+  if(m_stereo)
+    buf.num_samples/=2;
+  return buf;
+}
+//---------------------------------------------------------------------------
+
+void mod_audio_stream::update()
+{
+  if(m_stereo)
+  {
+    audio_block_t *block_l=allocate();
+    audio_block_t *block_r=allocate();
+    int16_t *data_l=block_l->data, *data_r=block_r->data;
+    for(unsigned i=0; i<AUDIO_BLOCK_SAMPLES; ++i)
+    {
+      uint16_t vl=m_audio_buffer.read_sample<uint16_t, 16>();
+      data_l[i]=vl-32768;
+      uint16_t vr=m_audio_buffer.read_sample<uint16_t, 16>();
+      data_r[i]=vr-32768;
+    }
+    transmit(block_l, 0);
+    transmit(block_r, 1);
+    release(block_l);
+    release(block_r);
+  }
+  else
   {
     audio_block_t *block=allocate();
     int16_t *data=block->data;
     for(unsigned i=0; i<AUDIO_BLOCK_SAMPLES; ++i)
     {
-      uint16_t v=s_audio_buffer.read_sample<uint16_t, 16>();
+      uint16_t v=m_audio_buffer.read_sample<uint16_t, 16>();
       data[i]=v-32768;
     }
     transmit(block, 0);
     release(block);
   }
-};
+}
 //---------------------------------------------------------------------------
 
-static mod_stream s_mod_stream;
+static mod_audio_stream s_mod_stream;
 static AudioOutputI2S s_dac;
-static AudioConnection s_c1(s_mod_stream, 0, s_dac, 0);
-static AudioConnection s_c2(s_mod_stream, 0, s_dac, 1);
 static AudioControlSGTL5000 s_sgtl5000;
 //---------------------------------------------------------------------------
+
 
 //===========================================================================
 // pmf_player
 //===========================================================================
-uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_)
+uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_) const
 {
   return uint32_t(AUDIO_SAMPLE_RATE_EXACT+0.5f);
 }
@@ -88,28 +149,29 @@ void pmf_player::start_playback(uint32_t sampling_freq_)
   AudioMemory(2);
   s_sgtl5000.enable();
   s_sgtl5000.volume(0.5);
-  s_audio_buffer.reset();
+  s_mod_stream.init(s_dac, PMF_USE_STEREO_MIXING?true:false);
 }
 //----
 
 void pmf_player::stop_playback()
 {
+  /*todo*/
 }
 //----
 
 void pmf_player::mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
 {
-  mix_buffer_impl<int32_t, 13>(buf_, num_samples_);
+  mix_buffer_impl<int32_t, PMF_USE_STEREO_MIXING?true:false, 13>(buf_, num_samples_);
 }
 //----
 
 pmf_mixer_buffer pmf_player::get_mixer_buffer()
 {
-  return s_audio_buffer.get_mixer_buffer();
+  return s_mod_stream.get_mixer_buffer();
 }
 //---------------------------------------------------------------------------
 
-#else // PFC_USE_AUDIO_SHIELD_SGTL5000
+#else // PFC_USE_SGTL5000_AUDIO_SHIELD
 //===========================================================================
 // pmf_player
 //===========================================================================
@@ -124,7 +186,7 @@ void playback_interrupt()
 }
 //----
 
-uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_)
+uint32_t pmf_player::get_sampling_freq(uint32_t sampling_freq_) const
 {
   // round to the closest frequency representable by the bus
   float us=1000000.0f/sampling_freq_;

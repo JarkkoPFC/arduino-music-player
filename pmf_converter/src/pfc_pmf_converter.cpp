@@ -40,8 +40,8 @@ using namespace pfc;
 // PMF format config
 //============================================================================
 // PMF config
-enum {pmf_converter_version=0x0510}; // v0.51
-enum {pmf_file_version=0x1300}; // v1.3
+enum {pmf_converter_version=0x0600}; // v0.6
+enum {pmf_file_version=0x1400}; // v1.4
 // PMF file structure
 enum {pmfcfg_offset_signature=PFC_OFFSETOF(pmf_header, signature)};
 enum {pmfcfg_offset_version=PFC_OFFSETOF(pmf_header, version)};
@@ -71,7 +71,7 @@ enum {pmfcfg_offset_pattern_metadata_track_offsets=2};
 enum {pmfcfg_sample_metadata_size=sizeof(pmf_sample_header)};
 enum {pmfcfg_offset_smp_data=PFC_OFFSETOF(pmf_sample_header, data_offset)};
 enum {pmfcfg_offset_smp_length=PFC_OFFSETOF(pmf_sample_header, length)};
-enum {pmfcfg_offset_smp_loop_length=PFC_OFFSETOF(pmf_sample_header, loop_length)};
+enum {pmfcfg_offset_smp_loop_length_and_panning=PFC_OFFSETOF(pmf_sample_header, loop_length_and_panning)};
 enum {pmfcfg_offset_smp_finetune=PFC_OFFSETOF(pmf_sample_header, finetune)};
 enum {pmfcfg_offset_smp_flags=PFC_OFFSETOF(pmf_sample_header, flags)};
 enum {pmfcfg_offset_smp_volume=PFC_OFFSETOF(pmf_sample_header, volume)};
@@ -81,6 +81,7 @@ enum {pmfcfg_offset_inst_vol_env=PFC_OFFSETOF(pmf_instrument_header, vol_env_off
 enum {pmfcfg_offset_inst_pitch_env=PFC_OFFSETOF(pmf_instrument_header, pitch_env_offset)};
 enum {pmfcfg_offset_inst_fadeout_speed=PFC_OFFSETOF(pmf_instrument_header, fadeout_speed)};
 enum {pmfcfg_offset_inst_volume=PFC_OFFSETOF(pmf_instrument_header, volume)};
+enum {pmfcfg_offset_inst_panning=PFC_OFFSETOF(pmf_instrument_header, panning)};
 // envelope configs
 enum {pmfcfg_offset_env_num_points=0};
 enum {pmfcfg_offset_env_loop_start=1};
@@ -438,6 +439,7 @@ pmf_instrument::pmf_instrument()
   sample_idx=unsigned(-1);
   fadeout_speed=65535;
   volume=0xff;
+  panning=-128;
 }
 //----------------------------------------------------------------------------
 
@@ -453,6 +455,7 @@ pmf_sample::pmf_sample()
   finetune=0;
   flags=0;
   volume=0;      // [0, 255]
+  panning=-128;
 }
 //----------------------------------------------------------------------------
 
@@ -1172,7 +1175,7 @@ void write_pmf_file(pmf_song &song_, const command_arguments &ca_)
       usize_t sample_file_offset=base_offs_sample_data+sinfo.data_offset;
       out_stream<<uint32(sample_file_offset);
       out_stream<<uint32(sinfo.cropped_len);
-      out_stream<<uint32(smp.loop_len<sinfo.cropped_len?smp.loop_len:sinfo.cropped_len);
+      out_stream<<((uint32(smp.loop_len<sinfo.cropped_len?smp.loop_len:sinfo.cropped_len)&0xffffff)|(uint32(smp.panning)<<24));
       out_stream<<int16(smp.finetune);
       out_stream<<uint8(smp.flags);
       out_stream<<uint8(smp.volume);
@@ -1202,7 +1205,7 @@ void write_pmf_file(pmf_song &song_, const command_arguments &ca_)
       out_stream<<uint16(iinfo.pitch_env_offset);
       out_stream<<uint16(inst.fadeout_speed);
       out_stream<<uint8(inst.volume);
-      out_stream<<uint8(0);
+      out_stream<<uint8(inst.panning);
       ++num_active_inst;
     }
   }

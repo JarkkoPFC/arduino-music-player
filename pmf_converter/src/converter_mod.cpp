@@ -116,7 +116,7 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
   // setup channels
   song_.channels.resize(num_channels);
   for(unsigned i=0; i<num_channels; ++i)
-    song_.channels[i].panning=i&1?127:-127;
+    song_.channels[i].panning=(i^(i>>1))&1?64:-64; // channel panning: LRRL LRRL...
 
   // setup song
   char song_name[21]={0};
@@ -276,7 +276,7 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
               if(effect_data&0xf0 && effect_data&0x0f)
                 break;
               track_row.effect=pmffx_note_vol_slide;
-              track_row.effect_data=effect_data<0x10?pmffx_vslidetype_down+effect_data:(pmffx_vslidetype_up+(effect_data>>4));
+              track_row.effect_data=effect_data<0x10?pmffx_volsldtype_down+effect_data:(pmffx_volsldtype_up+(effect_data>>4));
             } break;
 
             // continue vibrato + volume slide
@@ -286,7 +286,7 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
               if(effect_data&0xf0 && effect_data&0x0f)
                 break;
               track_row.effect=pmffx_vibrato_vol_slide;
-              track_row.effect_data=effect_data<0x10?pmffx_vslidetype_down+effect_data:(pmffx_vslidetype_up+(effect_data>>4));
+              track_row.effect_data=effect_data<0x10?pmffx_volsldtype_down+effect_data:(pmffx_volsldtype_up+(effect_data>>4));
             } break;
 
             // tremolo
@@ -294,7 +294,13 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
             {
               track_row.effect=pmffx_tremolo;
               track_row.effect_data=effect_data;
+            } break;
 
+            // set panning
+            case 0x8:
+            {
+              track_row.effect=pmffx_panning;
+              track_row.effect_data=uint8(effect_data>2?effect_data-128:-126)>>1; // 0=left(-63), 128=center(0), 255=right(63)
             } break;
 
             // set sample offset
@@ -309,9 +315,9 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
             {
               track_row.effect=pmffx_volume_slide;
               if(effect_data&0xf0)
-                track_row.effect_data=(effect_data>>4)|pmffx_vslidetype_up;
+                track_row.effect_data=(effect_data>>4)|pmffx_volsldtype_up;
               else if(effect_data&0x0f)
-                track_row.effect_data=effect_data|pmffx_vslidetype_down;
+                track_row.effect_data=effect_data|pmffx_volsldtype_down;
               else
                 track_row.effect_data=0;
             } break;
@@ -404,6 +410,13 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
                   }
                 } break;
 
+                // set panning (coarse)
+                case 8:
+                {
+                  track_row.effect=pmffx_panning;
+                  track_row.effect_data=uint8(effect_data&0Xf?(effect_data&0xf)+(effect_data<<4)-128:-126)>>1; // 0=left(-63), 15=right(63)
+                } break;
+
                 // retrigger sample
                 case 9:
                 {
@@ -415,14 +428,14 @@ e_pmf_error convert_mod(bin_input_stream_base &in_file_, pmf_song &song_)
                 case 10:
                 {
                   track_row.effect=pmffx_volume_slide;
-                  track_row.effect_data=(effect_data&0xf)|pmffx_vslidetype_fine_up;
+                  track_row.effect_data=(effect_data&0xf)|pmffx_volsldtype_fine_up;
                 } break;
 
                 // volume fineslide down
                 case 11:
                 {
                   track_row.effect=pmffx_volume_slide;
-                  track_row.effect_data=(effect_data&0xf)|pmffx_vslidetype_fine_down;
+                  track_row.effect_data=(effect_data&0xf)|pmffx_volsldtype_fine_down;
                 } break;
 
                 // cut sample

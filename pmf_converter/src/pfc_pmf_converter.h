@@ -83,6 +83,7 @@ enum e_pmf_effect
   pmffx_retrig_vol_slide,  // [xxxxyyyy], x=volume slide param, y=sample retrigger frequency
   pmffx_set_sample_offs,   // [xxxxxxxx], offset=x*256
   pmffx_subfx,             // [xxxxyyyy], x=sub-effect, y=sub-effect value
+  pmffx_panning,           // [xyzwwwww], x=type (0=set, 1=slide), y=precision (0=normal, 1=fine), z=direction (0=left, 1=right), w=value (if x=0, panning value is [yzwwwww])
 };
 enum e_pmf_subfx
 {
@@ -95,14 +96,42 @@ enum e_pmf_subfx
   pmfsubfx_note_cut,         // [0, 15], cut on X tick
   pmfsubfx_note_delay,       // [0, 15], delay X ticks
 };
-enum e_pmfx_vslide_type
+enum e_pmfx_volslide_type
 {
-  pmffx_vslidetype_down      =0x00,
-  pmffx_vslidetype_up        =0x10,
-  pmffx_vslidetype_fine_down =0x20,
-  pmffx_vslidetype_fine_up   =0x30,
+  pmffx_volsldtype_down      =0x00,
+  pmffx_volsldtype_up        =0x10,
+  pmffx_volsldtype_fine_down =0x20,
+  pmffx_volsldtype_fine_up   =0x30,
   //----
-  pmffx_vslidetype_mask      =0x30
+  pmffx_volsldtype_mask      =0x30
+};
+enum e_pmfx_panslide_type
+{
+  pmffx_pansldtype_left        =0x80,
+  pmffx_pansldtype_right       =0xa0,
+  pmffx_pansldtype_fine_left   =0xc0,
+  pmffx_pansldtype_fine_right  =0xe0,
+  //----
+  pmffx_pansldtype_val_mask    =0x0f,
+  pmffx_pansldtype_dir_mask    =0x20,
+  pmffx_pansldtype_fine_mask   =0x40,
+  pmffx_pansldtype_enable_mask =0x80
+};
+enum e_pmf_voleffect
+{
+  pmfvolfx_vol_slide            =0x40,
+  pmfvolfx_vol_slide_down       =0x40,
+  pmfvolfx_vol_slide_up         =0x50,
+  pmfvolfx_vol_slide_fine_down  =0x60,
+  pmfvolfx_vol_slide_fine_up    =0x70,
+  pmfvolfx_note_slide_down      =0x80,
+  pmfvolfx_note_slide_up        =0x90,
+  pmfvolfx_note_slide           =0xa0,
+  pmfvolfx_set_vibrato_speed    =0xb0,
+  pmfvolfx_vibrato              =0xc0,
+  pmfvolfx_set_panning          =0xd0,
+  pmfvolfx_pan_slide_fine_left  =0xe0,
+  pmfvolfx_pan_slide_fine_right =0xf0,
 };
 //----------------------------------------------------------------------------
 
@@ -155,7 +184,7 @@ struct pmf_sample_header
 {
   uint32 data_offset;
   uint32 length;
-  uint32 loop_length;
+  uint32 loop_length_and_panning; // loop_length=bits 0-23, panning=bits 24-31 (-127=left, 0=center, 127=right, -128=no pan)
   int16 finetune;
   uint8 flags;
   uint8 volume;
@@ -173,7 +202,7 @@ struct pmf_instrument_header
   uint16 pitch_env_offset;
   uint16 fadeout_speed;
   uint8 volume;
-  uint8 reserved;
+  int8 panning; // (-127=left, 0=center, 127=right, -128=no pan)
 };
 //----------------------------------------------------------------------------
 
@@ -187,7 +216,7 @@ struct pmf_channel
   pmf_channel();
   //--------------------------------------------------------------------------
 
-  int8 panning;
+  int8 panning; // (-127=left, 0=center, 127=right, -128=surround)
 };
 //----------------------------------------------------------------------------
 
@@ -275,6 +304,7 @@ struct pmf_instrument
   unsigned sample_idx;
   uint16 fadeout_speed;
   uint8 volume;
+  int8 panning;
   pmf_envelope vol_envelope;
   pmf_envelope pitch_envelope;
   array<pmf_note_map_entry> note_map;
@@ -296,6 +326,7 @@ struct pmf_sample
   int16 finetune;
   uint8 flags; // e_pmf_sample_flags
   uint8 volume;
+  int8 panning;
   owner_data data;
 };
 //----------------------------------------------------------------------------

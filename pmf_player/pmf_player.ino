@@ -38,9 +38,9 @@ void row_callback_test(void *custom_data_, uint8_t channel_idx_, uint8_t &note_i
 //----------------------------------------------------------------------------
 
 
-//===========================================================================
+//============================================================================
 // example visualization (animate LED's for each track with music)
-//===========================================================================
+//============================================================================
 #ifdef ARDUINO_ARCH_AVR
 enum {start_led_pin=8};
 enum {max_channel_leds=6};
@@ -69,7 +69,7 @@ void setup_example_visualization(pmf_player &player_)
   }
   player_.set_tick_callback(&example_visualization, &player_);
 }
-//---------------------------------------------------------------------------
+//----------------------------------------------------------------------------
 
 
 //============================================================================
@@ -77,7 +77,7 @@ void setup_example_visualization(pmf_player &player_)
 //============================================================================
 void setup()
 {
-#ifdef PMF_SERIAL_LOGS
+#if PMF_USE_SERIAL_LOGS==1
   // setup serial logging
   Serial.begin(9600);
   delay(1000);

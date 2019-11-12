@@ -51,7 +51,7 @@ struct pmf_sample_header
 {
   uint32_t data_offset;
   uint32_t length;
-  uint32_t loop_length;
+  uint32_t loop_length_and_panning;
   int16_t finetune;
   uint8_t flags;
   uint8_t volume;
@@ -69,7 +69,7 @@ struct pmf_instrument_header
   uint16_t pitch_env_offset;
   uint16_t fadeout_speed;
   uint8_t volume;
-  uint8_t reserved;
+  int8_t panning;
 };
 //----------------------------------------------------------------------------
 
@@ -91,7 +91,7 @@ enum e_pmf_sample_flags
 enum {pmfcfg_sample_metadata_size=sizeof(pmf_sample_header)};
 enum {pmfcfg_offset_smp_data=PFC_OFFSETOF(pmf_sample_header, data_offset)};
 enum {pmfcfg_offset_smp_length=PFC_OFFSETOF(pmf_sample_header, length)};
-enum {pmfcfg_offset_smp_loop_length=PFC_OFFSETOF(pmf_sample_header, loop_length)};
+enum {pmfcfg_offset_smp_loop_length_and_panning=PFC_OFFSETOF(pmf_sample_header, loop_length_and_panning)};
 enum {pmfcfg_offset_smp_finetune=PFC_OFFSETOF(pmf_sample_header, finetune)};
 enum {pmfcfg_offset_smp_flags=PFC_OFFSETOF(pmf_sample_header, flags)};
 enum {pmfcfg_offset_smp_volume=PFC_OFFSETOF(pmf_sample_header, volume)};
@@ -107,6 +107,7 @@ enum {pmfcfg_offset_inst_vol_env=PFC_OFFSETOF(pmf_instrument_header, vol_env_off
 enum {pmfcfg_offset_inst_pitch_env=PFC_OFFSETOF(pmf_instrument_header, pitch_env_offset)};
 enum {pmfcfg_offset_inst_fadeout_speed=PFC_OFFSETOF(pmf_instrument_header, fadeout_speed)};
 enum {pmfcfg_offset_inst_volume=PFC_OFFSETOF(pmf_instrument_header, volume)};
+enum {pmfcfg_offset_inst_panning=PFC_OFFSETOF(pmf_instrument_header, panning)};
 //----------------------------------------------------------------------------
 
 //============================================================================

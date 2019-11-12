@@ -52,16 +52,18 @@ typedef void(*pmf_tick_callback_t)(void *custom_data_);
 //===========================================================================
 // PMF player config
 //===========================================================================
-//#define PMF_LINEAR_INTERPOLATION         // interpolate samples linearly for better sound quality (more MCU intensive)
-//#define PMF_SERIAL_LOGS                  // enable logging to serial output (disable to save memory)
-enum {pmfplayer_max_channels=12};        // maximum number of audio playback channels (reduce to save memory)
+enum {pmfplayer_max_channels=12};        // maximum number of audio playback channels (reduce to save dynamic memory)
+#define PMF_USE_STEREO_MIXING 1          // use stereo mixing if supported (interleaved in the audio output buffer)
+#define PMF_USE_LINEAR_INTERPOLATION 0   // interpolate samples linearly for better sound quality (more performanmce intensive)
+#define PFC_USE_SGTL5000_AUDIO_SHIELD 0  // enable playback through SGTL5000-based audio shield (Teensy)
+#define PMF_USE_SERIAL_LOGS 0            // enable logging to serial output (disable to save memory)
 //---------------------------------------------------------------------------
 
 
 //===========================================================================
 // logging
 //===========================================================================
-#ifdef PMF_SERIAL_LOGS
+#if PMF_USE_SERIAL_LOGS==1
 #define PMF_SERIAL_LOG(...) {char buf[64]; sprintf(buf, __VA_ARGS__); Serial.print(buf);}
 #else
 #define PMF_SERIAL_LOG(...)
@@ -91,6 +93,7 @@ enum e_pmf_effect
   pmffx_retrig_vol_slide,  // [xxxxyyyy], x=volume slide param, y=sample retrigger frequency
   pmffx_set_sample_offset, // [xxxxxxxx], offset=x*256
   pmffx_subfx,             // [xxxxyyyy], x=sub-effect, y=sub-effect value
+  pmffx_panning,           // [xyzwwwww], x=type (0=set, 1=slide), y=precision (0=normal, 1=fine), z=direction (0=left, 1=right), w=value (if x=0, pan value is [yzwwwww])
 };
 //----
 
@@ -172,13 +175,13 @@ private:
   struct envelope_state;
   struct audio_channel;
   // platform specific functions (implemented in platform specific files)
-  uint32_t get_sampling_freq(uint32_t sampling_freq_);
+  uint32_t get_sampling_freq(uint32_t sampling_freq_) const;
   void start_playback(uint32_t sampling_freq_);
   void stop_playback();
   void mix_buffer(pmf_mixer_buffer&, unsigned num_samples_);
   pmf_mixer_buffer get_mixer_buffer();
   // platform agnostic reference functions
-  template<typename T, unsigned channel_bits=8> void mix_buffer_impl(pmf_mixer_buffer&, unsigned num_samples_);
+  template<typename T, bool stereo=false, unsigned channel_bits=8> void mix_buffer_impl(pmf_mixer_buffer&, unsigned num_samples_);
   // audio effects
   void apply_channel_effect_volume_slide(audio_channel&);
   void apply_channel_effect_note_slide(audio_channel&);
@@ -233,12 +236,14 @@ private:
     int16_t sample_finetune;       // sample finetune (9.7 fp)
     uint16_t note_period;          // current note period
     uint8_t sample_volume;         // sample volume (0.8 fp)
+    int8_t sample_panning;         // sample panning (-127=left, 0=center, 127=right, -128=surround)
     uint8_t base_note_idx;         // base note index
     int8_t inst_note_idx_offs;     // instrument note offset
     // sound effects
     uint8_t effect;                // current effect
     uint8_t effect_data;           // current effect data
     uint8_t vol_effect;            // current volume effect
+    int8_t fxmem_panning_spd;      // panning
     uint8_t fxmem_arpeggio;        // arpeggio
     uint8_t fxmem_note_slide_spd;  // note slide speed
     uint16_t fxmem_note_slide_prd; // note slide target period
@@ -289,7 +294,7 @@ private:
 };
 //---------------------------------------------------------------------------
 
-template<typename T, unsigned channel_bits>
+template<typename T, bool stereo, unsigned channel_bits>
 void pmf_player::mix_buffer_impl(pmf_mixer_buffer &buf_, unsigned num_samples_)
 {
   audio_channel *channel=m_channels, *channel_end=channel+m_num_playback_channels;
@@ -304,7 +309,7 @@ void pmf_player::mix_buffer_impl(pmf_mixer_buffer &buf_, unsigned num_samples_)
     uint32_t sample_pos=channel->sample_pos;
     int16_t sample_speed=channel->sample_speed;
     uint32_t sample_end=uint32_t(pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_length))<<8;
-    uint32_t sample_loop_len=pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_loop_length)<<8;
+    uint32_t sample_loop_len=(pgm_read_dword(channel->smp_metadata+pmfcfg_offset_smp_loop_length_and_panning)&0xffffff)<<8;
     uint8_t sample_volume=(channel->sample_volume*(channel->vol_env.value>>8))>>8;
     uint32_t sample_pos_offs=sample_end-sample_loop_len;
     if(sample_pos<sample_pos_offs)
@@ -313,20 +318,34 @@ void pmf_player::mix_buffer_impl(pmf_mixer_buffer &buf_, unsigned num_samples_)
     sample_pos-=sample_pos_offs;
     sample_end-=sample_pos_offs;
 
+    // setup panning
+    int8_t panning=channel->sample_panning;
+    int16_t sample_phase_shift=panning==-128?0xffff:0;
+    panning&=~int8_t(sample_phase_shift);
+    uint8_t sample_volume_l=uint8_t((uint16_t(sample_volume)*uint8_t(128-panning))>>8);
+    uint8_t sample_volume_r=uint8_t((uint16_t(sample_volume)*uint8_t(128+panning))>>8);
+
     // mix channel to the buffer
-    T *buf=(T*)buf_.begin, *buffer_end=buf+num_samples_;
+    T *buf=(T*)buf_.begin, *buffer_end=buf+num_samples_*(stereo?2:1);
     do
     {
-      // add channel sample to buffer
-#ifdef PMF_LINEAR_INTERPOLATION
-      uint16_t smp=((uint16_t)pgm_read_word(sample_addr+(sample_pos>>8)));
+      // get sample data and adjust volume
+#if PMF_USE_LINEAR_INTERPOLATION==1
+      uint16_t smp_data=((uint16_t)pgm_read_word(sample_addr+(sample_pos>>8)));
       uint8_t sample_pos_frc=sample_pos&255;
-      int16_t interp_smp=((int16_t(int8_t(smp&255))*(256-sample_pos_frc))>>8)+((int16_t(int8_t(smp>>8))*sample_pos_frc)>>8);
-      *buf+=T(sample_volume*interp_smp)>>(16-channel_bits);
+      int16_t smp=((int16_t(int8_t(smp_data&255))*(256-sample_pos_frc))>>8)+((int16_t(int8_t(smp_data>>8))*sample_pos_frc)>>8);
 #else
-      int8_t smp=(int8_t)pgm_read_byte(sample_addr+(sample_pos>>8));
-      *buf+=T(sample_volume*int16_t(smp))>>(16-channel_bits);
+      int16_t smp=(int8_t)pgm_read_byte(sample_addr+(sample_pos>>8));
 #endif
+
+      // mix the result to the audio buffer (the if-branch with compile-time constant will be optimized out)
+      if(stereo)
+      {
+        (*buf++)+=T(sample_volume_l*smp)>>(16-channel_bits);
+        (*buf++)+=T(sample_volume_r*(smp^sample_phase_shift))>>(16-channel_bits);
+      }
+      else
+        (*buf++)+=T(sample_volume*smp)>>(16-channel_bits);
 
       // advance sample position
       sample_pos+=sample_speed;
@@ -348,12 +367,12 @@ void pmf_player::mix_buffer_impl(pmf_mixer_buffer &buf_, unsigned num_samples_)
         else
           sample_pos-=sample_loop_len;
       }
-    } while(++buf<buffer_end);
+    } while(buf<buffer_end);
     channel->sample_pos=sample_pos+sample_pos_offs;
   } while(++channel!=channel_end);
 
   // advance buffer
-  ((T*&)buf_.begin)+=num_samples_;
+  ((T*&)buf_.begin)+=num_samples_*(stereo?2:1);
   buf_.num_samples-=num_samples_;
 }
 //---------------------------------------------------------------------------

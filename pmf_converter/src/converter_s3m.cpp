@@ -62,21 +62,6 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
   if(flags&64)
     warnf("Warning: S3M ST3.0 volume slides not supported\r\n");
 
-  // setup channels
-  unsigned num_channels=0;
-  song_.channels.reserve(32);
-  for(unsigned i=0; i<32; ++i)
-  {
-    uint8 cset=chl_settings[i];
-    if(cset!=255)
-    {
-      cset&=0x7f;
-      pmf_channel &chl=song_.channels.push_back();
-      chl.panning=cset<8?-127:cset<16?127:0;
-      ++num_channels;
-    }
-  }
-
   // setup song
   song_.name=song_name;
   song_.flags=0;
@@ -115,6 +100,29 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
   in_file_.read_bytes(pat_pptrs.data(), num_patterns*2);
   if(dpp==252)
     in_file_.read_bytes(def_ppos, 32);
+
+  // setup channels
+  unsigned num_channels=0;
+  song_.channels.reserve(32);
+  for(unsigned i=0; i<32; ++i)
+  {
+    uint8 cset=chl_settings[i];
+    if(cset!=255)
+    {
+      cset&=0x7f;
+      pmf_channel &chl=song_.channels.push_back();
+      if(def_ppos[i]&0x20)
+      {
+        uint8 pan=def_ppos[i]&0xf;
+        chl.panning=int8(pan?(pan|(pan<<4))-128:-127);
+      }
+      else
+        chl.panning=cset<8?-76:cset<16?76:0;
+      ++num_channels;
+    }
+  }
+
+  // setup playlist
   song_.playlist.resize(num_orders);
   for(unsigned i=0; i<num_orders; ++i)
     song_.playlist[i]=orders[i];
@@ -231,7 +239,10 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
         {
           uint8 volume;
           in_file_>>volume;
-          track_row.volume=volume<64?volume:63;
+          if(volume<=64)
+            track_row.volume=volume<64?volume:63;
+          else if(volume>=128 && volume<=128+64)
+            track_row.volume=pmfvolfx_set_panning|(uint8(volume>128+63?63:volume-128)>>2);
         }
         if(desc&128)
         {
@@ -274,12 +285,14 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
             // D: volume slide
             case 'D'+fx_offset:
             {
+              if(command_info==0xff)
+                break;
               if((command_info&0xf0)!=0xf0 && (command_info&0x0f)!=0x0f)
               {
                 // normal volume slide
                 track_row.effect=pmffx_volume_slide;
                 if(command_info)
-                  track_row.effect_data=command_info&0x0f?((command_info&0x0f)|pmffx_vslidetype_down):(command_info>>4)|pmffx_vslidetype_up;
+                  track_row.effect_data=command_info&0x0f?((command_info&0x0f)|pmffx_volsldtype_down):(command_info>>4)|pmffx_volsldtype_up;
                 else
                   track_row.effect_data=0;
               }
@@ -287,13 +300,13 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
               {
                 // fine-slide down
                 track_row.effect=pmffx_volume_slide;
-                track_row.effect_data=(command_info&0x0f)|pmffx_vslidetype_fine_down;
+                track_row.effect_data=(command_info&0x0f)|pmffx_volsldtype_fine_down;
               }
               else if((command_info&0x0f)==0x0f)
               {
                 // fine-slide up
                 track_row.effect=pmffx_volume_slide;
-                track_row.effect_data=(command_info>>4)|pmffx_vslidetype_fine_up;
+                track_row.effect_data=(command_info>>4)|pmffx_volsldtype_fine_up;
               }
             } break;
 
@@ -353,7 +366,7 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
               if(command_info&0xf0 && command_info&0x0f)
                 break;
               track_row.effect=pmffx_vibrato_vol_slide;
-              track_row.effect_data=command_info<0x10?pmffx_vslidetype_down+command_info:(pmffx_vslidetype_up+(command_info>>4));
+              track_row.effect_data=command_info<0x10?pmffx_volsldtype_down+command_info:(pmffx_volsldtype_up+(command_info>>4));
             } break;
 
             // L: portamento + volume slide
@@ -363,13 +376,42 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
               if(command_info&0xf0 && command_info&0x0f)
                 break;
               track_row.effect=pmffx_note_vol_slide;
-              track_row.effect_data=command_info<0x10?pmffx_vslidetype_down+command_info:(pmffx_vslidetype_up+(command_info>>4));
+              track_row.effect_data=command_info<0x10?pmffx_volsldtype_down+command_info:(pmffx_volsldtype_up+(command_info>>4));
             } break;
 
+            // sample offset
             case 'O'+fx_offset:
             {
               track_row.effect=pmffx_set_sample_offs;
               track_row.effect_data=command_info;
+            } break;
+
+            // panning slide
+            case 'P'+fx_offset:
+            {
+              if(command_info==0xff)
+                break;
+              if((command_info&0xf0)!=0xf0 && (command_info&0x0f)!=0x0f)
+              {
+                // normal panning slide
+                track_row.effect=pmffx_panning;
+                if(command_info)
+                  track_row.effect_data=command_info&0x0f?((command_info&0x0f)|pmffx_pansldtype_right):(command_info>>4)|pmffx_pansldtype_left;
+                else
+                  track_row.effect_data=pmffx_pansldtype_enable_mask;
+              }
+              else if((command_info&0xf0)==0xf0)
+              {
+                // fine-slide right
+                track_row.effect=pmffx_panning;
+                track_row.effect_data=(command_info&0x0f)|pmffx_pansldtype_fine_right;
+              }
+              else if((command_info&0x0f)==0x0f)
+              {
+                // fine-slide left
+                track_row.effect=pmffx_panning;
+                track_row.effect_data=(command_info>>4)|pmffx_pansldtype_fine_left;
+              }
             } break;
 
             // retrigger sample + volume slide
@@ -428,10 +470,11 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
                   }
                 } break;
 
-                // set panning position
+                // set panning (coarse)
                 case 0x8:
                 {
-                  /*todo*/
+                  track_row.effect=pmffx_panning;
+                  track_row.effect_data=uint8(command_info&0xf?(command_info&0xf)+(command_info<<4)-128:-126)>>1; // 0=left(-63), 15=right(63)
                 } break;
 
                 // old stereo control
@@ -499,6 +542,21 @@ e_pmf_error convert_s3m(bin_input_stream_base &in_file_, pmf_song &song_)
             case 'V'+fx_offset:
             {
               /*todo*/
+            } break;
+
+            // X: set panning
+            case 'X'+fx_offset:
+            {
+              if(command_info<=0x80)
+              {
+                track_row.effect=pmffx_panning;
+                track_row.effect_data=uint8((command_info<1?1:command_info>0x7f?0x7f:command_info)-64)&0x7f; // 0=left(-63), 128=center(0), 255=right(63)
+              }
+              else if(command_info==0xa4)
+              {
+                track_row.effect=pmffx_panning;
+                track_row.effect_data=uint8(-64)&0x7f; // 0xa4=surround(-64)
+              }
             } break;
           }
         }
