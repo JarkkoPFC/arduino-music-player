@@ -181,8 +181,12 @@ static IntervalTimer s_int_timer;
 
 void playback_interrupt()
 {
-  uint16_t smp=s_audio_buffer.read_sample<uint16_t, 12>();
-  analogWriteDAC0(smp);
+  uint16_t smp0=s_audio_buffer.read_sample<uint16_t, 12>();
+  analogWriteDAC0(smp0);
+#if PMF_USE_STEREO_MIXING==1
+  uint16_t smp1=s_audio_buffer.read_sample<uint16_t, 12>();
+  analogWriteDAC1(smp1); // if you get compilation error here, your Teensy board doesn't have two DAC's for stereo output. Disable stereo output by setting "PMF_USE_STEREO_MIXING 0" in pmf_player.h
+#endif
 }
 //----
 
@@ -212,13 +216,17 @@ void pmf_player::stop_playback()
 
 void pmf_player::mix_buffer(pmf_mixer_buffer &buf_, unsigned num_samples_)
 {
-  mix_buffer_impl<int16_t>(buf_, num_samples_);
+  mix_buffer_impl<int16_t, PMF_USE_STEREO_MIXING?true:false, PMF_USE_STEREO_MIXING?9:8>(buf_, num_samples_);
 }
 //----
 
 pmf_mixer_buffer pmf_player::get_mixer_buffer()
 {
-  return s_audio_buffer.get_mixer_buffer();
+  pmf_mixer_buffer buf=s_audio_buffer.get_mixer_buffer();
+#if PMF_USE_STEREO_MIXING==1
+  buf.num_samples/=2;
+#endif
+  return buf;
 }
 //---------------------------------------------------------------------------
 #endif
