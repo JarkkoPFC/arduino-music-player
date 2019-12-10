@@ -23,7 +23,7 @@ bin_input_stream_base::~bin_input_stream_base()
 template<typename T>
 bin_input_stream_base &bin_input_stream_base::operator>>(T &v_)
 {
-  stream((remove_volatile<T>::res&)v_, meta_bool<is_type_pod_stream<T>::res>());
+  stream((typename remove_volatile<T>::res&)v_, meta_bool<is_type_pod_stream<T>::res>());
   return *this;
 }
 //----
@@ -32,7 +32,7 @@ template<typename T>
 void bin_input_stream_base::read(T *p_, usize_t count_)
 {
   PFC_ASSERT_PEDANTIC(p_!=0 || !count_);
-  stream((remove_volatile<T>::res*)p_, count_, meta_bool<is_type_pod_stream<T>::res>());
+  stream((typename remove_volatile<T>::res*)p_, count_, meta_bool<is_type_pod_stream<T>::res>());
 }
 //----
 
@@ -191,7 +191,7 @@ bin_output_stream_base::~bin_output_stream_base()
 template<typename T>
 bin_output_stream_base &bin_output_stream_base::operator<<(const T &v_)
 {
-  stream((remove_volatile<T>::res&)v_, meta_bool<is_type_pod_stream<T>::res>());
+  stream((typename remove_volatile<T>::res&)v_, meta_bool<is_type_pod_stream<T>::res>());
   return *this;
 }
 //----
@@ -233,7 +233,7 @@ template<typename T>
 void bin_output_stream_base::write(const T *p_, usize_t count_)
 {
   PFC_ASSERT_PEDANTIC(p_!=0 || !count_);
-  stream((remove_volatile<T>::res*)p_, count_, meta_bool<is_type_pod_stream<T>::res>());
+  stream((typename remove_volatile<T>::res*)p_, count_, meta_bool<is_type_pod_stream<T>::res>());
 }
 //----
 

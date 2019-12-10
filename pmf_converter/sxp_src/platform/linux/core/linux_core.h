@@ -16,6 +16,7 @@
 // external
 #include "sxp_src/core/config.h"
 #include <cmath>
+#include <stdio.h>
 namespace pfc
 {
 

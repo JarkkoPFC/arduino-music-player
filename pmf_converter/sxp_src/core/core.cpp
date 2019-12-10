@@ -7,6 +7,7 @@
 
 #include "containers.h"
 #include "sort.h"
+#include <stdarg.h>
 using namespace pfc;
 //----------------------------------------------------------------------------
 

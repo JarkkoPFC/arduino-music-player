@@ -264,8 +264,13 @@ const char *working_dir();
 //============================================================================
 // misc
 //============================================================================
+#ifdef PFC_COMPILER_GCC
+#define PFC_OFFSETOF(type__, mvar__) __builtin_offsetof(type__, mvar__)
+#define PFC_OFFSETOF_MVARPTR(type__, mvarptr__) __builtin_offsetof(type__, mvar__)
+#else
 #define PFC_OFFSETOF(type__, mvar__) ((usize_t)&(((type__*)0)->mvar__))
 #define PFC_OFFSETOF_MVARPTR(type__, mvarptr__) ((usize_t)&(((type__*)0)->*mvarptr__))   /* todo: temp workaround of a gcc bug */
+#endif
 #define PFC_NOTHROW throw()
 //----------------------------------------------------------------------------
 
@@ -828,6 +833,36 @@ private:
 
 #ifdef PFC_BUILDOP_EXCEPTIONS
   memory_allocator_base &m_allocator;
+#endif
+};
+//----------------------------------------------------------------------------
+
+
+//============================================================================
+// eh_dtor
+//============================================================================
+#ifdef PFC_BUILDOP_EXCEPTIONS
+#define PFC_EDTOR(dtor__, method__) pfc::eh_dtor exception_destructor(dtor__, method__)
+#define PFC_EDTOR_RESET() {exception_destructor.reset();}
+#else
+#define PFC_EDTOR(dtor__, method__) {}
+#define PFC_EDTOR_RESET() {}
+#endif
+//----------------------------------------------------------------------------
+
+class eh_dtor
+{
+public:
+  // construction
+  template<typename T> PFC_INLINE eh_dtor(T &dtor_, void(T::*method_)());
+  PFC_INLINE ~eh_dtor();
+  PFC_INLINE void reset();
+  //--------------------------------------------------------------------------
+
+private:
+#ifdef PFC_BUILDOP_EXCEPTIONS
+  eh_dtor *m_dtor;
+  void(eh_dtor::*m_method)();
 #endif
 };
 //----------------------------------------------------------------------------

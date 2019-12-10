@@ -17,6 +17,7 @@
 #include "cstr.h"
 #include "meta.h"
 #include <stdio.h>
+#include <stdarg.h>
 namespace pfc
 {
 // new

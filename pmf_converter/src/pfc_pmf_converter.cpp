@@ -278,6 +278,7 @@ bool parse_command_arguments(command_arguments &ca_, const char **args_, unsigne
   if(!ca_.input_file.size() || !ca_.output_file.size())
   {
     log(s_usage_message);
+    log("\r\n");
     return false;
   }
   return true;

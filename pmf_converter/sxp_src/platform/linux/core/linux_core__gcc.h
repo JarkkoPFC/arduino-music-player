@@ -16,6 +16,8 @@
 // external
 #include "linux_core.h"
 #include <mm_malloc.h>
+#include <sched.h>
+#include <unistd.h>
 namespace pfc
 {
 
@@ -101,7 +103,7 @@ PFC_INLINE void thread_nap()
 }
 //----
 
-PFC_INLINE void thread_sleep(ufloat time_)
+PFC_INLINE void thread_sleep(float time_)
 {
   unsigned num_usecs=unsigned(time_*1000000.0f+0.5f);
   usleep(num_usecs);

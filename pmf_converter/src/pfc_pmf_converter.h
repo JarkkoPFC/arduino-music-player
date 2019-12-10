@@ -63,7 +63,7 @@ enum {pmfcfg_note_cut=120};
 enum {pmfcfg_note_off=121};
 // PMF effects
 enum {num_subfx_value_bits=4};
-enum {subfx_value_mask=~(-1<<num_subfx_value_bits)};
+enum {subfx_value_mask=~(unsigned(-1)<<num_subfx_value_bits)};
 enum e_pmf_effect
 {
   // global playback control
