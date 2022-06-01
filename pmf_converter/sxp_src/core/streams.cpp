@@ -112,7 +112,7 @@ void bit_input_stream::update_cache()
     m_stream.read_bytes(m_cache+num_tail_bytes, num_cache_fill_bytes);
     mem_zero(m_cache+num_tail_bytes+num_cache_fill_bytes, cache_size-num_tail_bytes-num_cache_fill_bytes);
     m_cache_bit_pos&=7;
-    m_cache_start_bit_pos+=cache_size*8;
+    m_cache_start_bit_pos+=num_cache_fill_bytes*8;
   }
 }
 //----------------------------------------------------------------------------
